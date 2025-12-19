@@ -1,5 +1,14 @@
 import { BusEvent } from '../shared/types.ts';
 
+declare global {
+  interface Window {
+    __bus: {
+      emit: (e: any) => void;
+      on: (cb: (e: any) => void) => void;
+    }
+  }
+}
+
 /**
  * 渲染进程事件总线客户端（类型安全）
  * - 通过 preload 暴露的 window.__bus 与主进程通信
