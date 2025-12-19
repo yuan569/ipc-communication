@@ -4,10 +4,10 @@
  * - 提示：示例中涉及 BrowserWindow 的部分，需在实际应用中替换为真实窗口实例
  */
 
-import { createEventBus } from './index.ts'
+import { createEventBus } from './index'
 import type { BrowserWindow } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
-import type { BusEvent } from '../shared/types.ts'
+import type { BusEvent } from '../shared/types'
 
 // 1) 定义事件-负载映射，获得类型安全
 export type EventMap = {

@@ -1,4 +1,4 @@
-import { createBusClient } from './client.ts';
+import { createBusClient } from './client';
 import { v4 as uuidv4 } from 'uuid';
 
 // 定义事件-负载映射，获得类型安全

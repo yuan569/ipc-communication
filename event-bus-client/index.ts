@@ -1,2 +1,2 @@
 export { createBusClient } from './client';
-export * from '../shared/types.ts';
+export * from '../shared/types';

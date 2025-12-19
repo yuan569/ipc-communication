@@ -7,8 +7,14 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 contextBridge.exposeInMainWorld('__bus', {
-  // 发送事件到主进程：主进程会统一进行校验/审计/分发
+  // Fire-and-forget：发送事件到主进程，主进程会统一进行校验/审计/分发
   emit: (e) => ipcRenderer.send('bus:emit', e),
+
+  // ACK 通道：仅返回分发确认（不等待业务响应）
+  ack: (e) => ipcRenderer.invoke('bus:ack', e),
+
+  // REQUEST-RESPONSE 通道：等待业务响应（通过 replyTo 回传）
+  request: (e, options) => ipcRenderer.invoke('bus:request', e, options),
 
   // 订阅来自主进程的事件推送：主进程通过 'bus:event' 渠道广播或定向发送
   // 这里不做类型过滤，类型过滤交由渲染端 client（本地二次分发）处理

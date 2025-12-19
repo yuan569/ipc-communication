@@ -1,5 +1,6 @@
 import { BrowserWindow, ipcMain } from 'electron';
-import { BusEvent } from '../shared/types.ts';
+import { v4 as uuidv4 } from 'uuid';
+import { BusEvent, BusResponse, RequestOptions } from '../shared/types';
 import { auditLog } from './audit';
 import { validateEvent } from './router';
 
@@ -28,6 +29,11 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
    * 使用 Set 避免重复注册同一函数，同时方便删除
    */
   const handlers = new Map<string, Set<(event: BusEvent<any>) => void>>();
+
+  // 参数与守卫
+  const PENDING_CAP = 1000; // 最大并发请求等待数
+  const SWEEP_INTERVAL_MS = 60_000; // 定期清扫周期
+
 
   /**
    * 注册窗口引用，便于后续按目标名定向分发事件
@@ -80,21 +86,69 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
     }
   }
 
+  // 请求等待表：key=原请求 id，value=resolve 函数与超时
+  const pending = new Map<string, { resolve: (res: BusResponse<any>) => void; timer: NodeJS.Timeout; createdAt: number; expireAt: number }>();
+
   /**
    * 发送事件（主进程内调用）
    * 流程：校验 -> 审计 -> 主进程内部处理 -> 分发给 Renderer
    */
   function emit<K extends keyof EM & string>(event: BusEvent<EM[K]>) {
+    // 若为响应（带 replyTo），优先完成等待中的请求
+    if (event.replyTo && pending.has(event.replyTo)) {
+      const p = pending.get(event.replyTo)!;
+      clearTimeout(p.timer);
+      pending.delete(event.replyTo);
+      p.resolve({ ok: true, data: (event as any).payload });
+      return; // 响应消息不再继续分发
+    }
+
     // 1) 事件校验（来源/域/字段等规则）
     validateEvent(event);
     // 2) 审计日志（可替换为 ELK/Kafka 等）
     auditLog(event);
 
     // 3) 主进程内部处理（仅调用注册在主进程的 handlers）
-    (handlers.get(event.type as string) || new Set()).forEach(fn => fn(event as any));
+    (handlers.get(event.type as string) || new Set()).forEach(fn => {
+      try {
+        fn(event as any);
+      } catch (err) {
+        try { console.error('[bus][handler][error]', err); } catch {}
+      }
+    });
 
     // 4) 分发给 Renderer（目标窗口或广播）
     dispatch(event as any);
+  }
+
+  /**
+   * 请求（支持 ack/request-response + 超时）
+   * - ack: true => 分发后立即返回 ack
+   * - ack: false/默认 => 等待某个 Renderer 使用 replyTo=原 id 发回响应
+   */
+  function request<T = any>(event: BusEvent<any>, options?: RequestOptions): Promise<BusResponse<T>> {
+    const timeout = (options?.timeout ?? 10000);
+
+    // 补齐必要字段（若调用方未补齐）
+    if (!event.id) event.id = uuidv4();
+
+    // 容量守卫
+    if (pending.size >= PENDING_CAP) {
+      return Promise.resolve({ ok: false, error: 'over_capacity' });
+    }
+
+    return new Promise<BusResponse<T>>((resolve) => {
+      const now = Date.now();
+      const timer = setTimeout(() => {
+        const p = pending.get(event.id);
+        if (p) {
+          pending.delete(event.id);
+          resolve({ ok: false, error: 'timeout' });
+        }
+      }, timeout);
+      pending.set(event.id, { resolve: resolve as any, timer, createdAt: now, expireAt: now + timeout });
+      emit(event as any);
+    });
   }
 
   /**
@@ -114,7 +168,50 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
   }
 
   // IPC 桥接：接收来自 Renderer 的 "bus:emit"，交由主进程 emit 统一处理
-  ipcMain.on('bus:emit', (_, event: BusEvent<any>) => emit(event as any));
+  ipcMain.on('bus:emit', (_, event: BusEvent<any>) => {
+    try {
+      emit(event as any);
+    } catch (err) {
+      try { console.error('[bus][emit][error]', err); } catch {}
+    }
+  });
 
-  return { registerWindow, on, once, off, emit };
+  // IPC 桥接（ACK）：仅返回分发确认，不等待业务响应
+  ipcMain.handle('bus:ack', async (_evt, event: BusEvent<any>) => {
+    try {
+      if (!event.id) event.id = uuidv4();
+      // 走统一 emit 流程（校验/审计/主进程处理/分发），但不等待任何业务响应
+      emit(event as any);
+      return { id: event.id };
+    } catch (err: any) {
+      return { id: event?.id, error: String(err?.message || err) };
+    }
+  });
+
+  // IPC 桥接（REQUEST）：等待业务响应（通过 replyTo=原 id 的事件触发）
+  ipcMain.handle('bus:request', async (_evt, event: BusEvent<any>, options?: RequestOptions) => {
+    try {
+      return await request(event, options);
+    } catch (err: any) {
+      return { ok: false, error: String(err?.message || err) };
+    }
+  });
+
+  // 定期清扫 pending，防御异常堆积
+  setInterval(() => {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [id, p] of pending) {
+      if (p.expireAt <= now) {
+        try { clearTimeout(p.timer); } catch {}
+        pending.delete(id);
+        cleaned++;
+      }
+    }
+    if (cleaned > 0) {
+      try { console.warn(`[bus][sweep] cleaned ${cleaned}, remaining ${pending.size}`); } catch {}
+    }
+  }, SWEEP_INTERVAL_MS).unref?.();
+
+  return { registerWindow, on, once, off, emit, request };
 }

@@ -1,4 +1,4 @@
-import { BusEvent } from '../shared/types.ts';
+import { BusAck, BusEvent, BusResponse, RequestOptions } from '../shared/types';
 
 /**
  * 渲染进程事件总线客户端（类型安全）
@@ -12,6 +12,19 @@ import { BusEvent } from '../shared/types.ts';
  *   const off = bus.on('CALL_START', (e) => console.log(e.payload.caller));
  *   bus.emit({ id, type: 'CALL_START', domain: 'call', target: '*', payload: { caller: '10086', ticketId: 'T1' } });
  */
+import { v4 as uuidv4 } from 'uuid';
+
+declare global {
+  interface Window {
+    __bus: {
+      emit: (e: any) => void;
+      on: (cb: (e: any) => void) => void;
+      ack: (e: any) => Promise<{ id: string; error?: string } | import('../shared/types').BusAck>;
+      request: (e: any, options?: RequestOptions) => Promise<BusResponse<any>>;
+    }
+  }
+}
+
 export function createBusClient<EM extends Record<string, any> = Record<string, any>>(identity: string) {
   // 针对每个事件类型维护一组处理器（Set 避免重复注册，且便于删除）
   type Handler<K extends keyof EM & string> = (event: BusEvent<EM[K]>) => void;
@@ -46,6 +59,36 @@ export function createBusClient<EM extends Record<string, any> = Record<string, 
       ts: Date.now()
     };
     window.__bus.emit(full);
+  }
+
+  /**
+   * request：请求-响应（等待 replyTo，支持超时）
+   * - 发出请求事件，等待某个渲染端 emit 带 replyTo=原 id 的响应
+   * - 超时返回 { ok: false, error: 'timeout' }
+   */
+  function request<K extends keyof EM & string, R = any>(event: Omit<BusEvent<EM[K]>, 'source' | 'ts'>, options?: RequestOptions) {
+    const full: BusEvent<EM[K]> = {
+      ...(event as any),
+      source: identity,
+      ts: Date.now()
+    };
+    return window.__bus.request(full, options) as Promise<BusResponse<R>>;
+  }
+
+  /**
+   * respond：对某个请求事件进行响应（通过 replyTo 关联）
+   */
+  function respond<K extends keyof EM & string, R = any>(to: BusEvent<EM[K]>, payload: R) {
+    const reply: BusEvent<R> = {
+      id: uuidv4(),
+      type: to.type,
+      domain: to.domain,
+      source: identity,
+      payload,
+      ts: Date.now(),
+      replyTo: to.id
+    };
+    window.__bus.emit(reply);
   }
 
   /**
@@ -88,5 +131,5 @@ export function createBusClient<EM extends Record<string, any> = Record<string, 
     }
   }
 
-  return { emit, on, once, off };
+  return { emit, request, respond, on, once, off };
 }
