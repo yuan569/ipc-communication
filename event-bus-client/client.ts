@@ -49,7 +49,7 @@ export function createBusClient<EM extends Record<string, any> = Record<string, 
   }
 
   /**
-   * 发送事件到主进程
+   * 发送事件到主进程（fire-and-forget）
    * - 会自动补齐 source=identity 与 ts=Date.now()
    */
   function emit<K extends keyof EM & string>(event: Omit<BusEvent<EM[K]>, 'source' | 'ts'>) {
@@ -59,6 +59,18 @@ export function createBusClient<EM extends Record<string, any> = Record<string, 
       ts: Date.now()
     };
     window.__bus.emit(full);
+  }
+
+  /**
+   * ACK：仅请求分发确认，不等待业务响应
+   */
+  function ack<K extends keyof EM & string>(event: Omit<BusEvent<EM[K]>, 'source' | 'ts'>) {
+    const full: BusEvent<EM[K]> = {
+      ...(event as any),
+      source: identity,
+      ts: Date.now()
+    };
+    return window.__bus.ack(full) as Promise<BusAck>;
   }
 
   /**
@@ -131,5 +143,5 @@ export function createBusClient<EM extends Record<string, any> = Record<string, 
     }
   }
 
-  return { emit, request, respond, on, once, off };
+  return { emit, ack, request, respond, on, once, off };
 }

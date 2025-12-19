@@ -169,6 +169,7 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
 
   // IPC 桥接：接收来自 Renderer 的 "bus:emit"，交由主进程 emit 统一处理
   ipcMain.on('bus:emit', (_, event: BusEvent<any>) => {
+    console.log('[handle:bus-emit][event]', event);
     try {
       emit(event as any);
     } catch (err) {
@@ -178,6 +179,7 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
 
   // IPC 桥接（ACK）：仅返回分发确认，不等待业务响应
   ipcMain.handle('bus:ack', async (_evt, event: BusEvent<any>) => {
+    console.log('[handle:bus-ack][event]', event);
     try {
       if (!event.id) event.id = uuidv4();
       // 走统一 emit 流程（校验/审计/主进程处理/分发），但不等待任何业务响应
@@ -190,6 +192,7 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
 
   // IPC 桥接（REQUEST）：等待业务响应（通过 replyTo=原 id 的事件触发）
   ipcMain.handle('bus:request', async (_evt, event: BusEvent<any>, options?: RequestOptions) => {
+    console.log('[handle:bus-request][event]', event);
     try {
       return await request(event, options);
     } catch (err: any) {
