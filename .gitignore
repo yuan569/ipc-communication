@@ -17,6 +17,7 @@
 /src/.next/
 /out/
 /dist/
+/dist-umd/
 
 # production
 /build
