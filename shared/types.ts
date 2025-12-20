@@ -9,6 +9,12 @@ export interface BusEvent<T = any> {
   replyTo?: string;       // 若为响应消息，指向原请求 id
 }
 
+// 1) 定义事件-负载映射，获得类型安全
+export type EventMap = {
+  CALL_START: { caller: string; ticketId: string };
+  CREDIT_APPROVE: { orderId: string };
+};
+
 export type EmitOptions = {
   ack?: boolean;
 };
