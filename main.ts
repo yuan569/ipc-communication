@@ -19,7 +19,7 @@ const state = {
 
 function v4() { return require('uuid').v4(); }
 
-// —— 窗口管理 ——
+// —— 窗口引用 ——
 let workbench: BrowserWindow | null = null;
 let dialer: BrowserWindow | null = null;
 let partnerAuto: BrowserWindow | null = null;
@@ -44,42 +44,71 @@ async function createWindows() {
     console.warn('[main] preload not found at appPath, try __dirname path:', alt);
     if (fs.existsSync(alt)) preloadPath = alt;
   }
+
   const base = app.getAppPath();
-  const commonPrefs = { contextIsolation: true, nodeIntegration: false, preload: preloadPath };
+  const commonPrefs = { contextIsolation: true, nodeIntegration: false, preload: preloadPath } as const;
 
-  // Workbench（发起方）
-  workbench = new BrowserWindow({ width: 1100, height: 800, title: 'Workbench', webPreferences: commonPrefs });
-  bindDevtoolsShortcut(workbench);
-  bus.registerWindow('workbench', workbench);
-  await workbench.loadFile(path.join(base, 'renderer', 'workbench', 'index.html'));
+  // 通用创建函数：创建窗口 → 绑定快捷键 → 注册到总线 → 加载页面
+  async function createAndRegisterWindow(spec: {
+    id: string;
+    title: string;
+    size: { width: number; height: number };
+    htmlSegments: string[]; // e.g. ['renderer','workbench','index.html']
+  }): Promise<BrowserWindow> {
+    const win = new BrowserWindow({
+      width: spec.size.width,
+      height: spec.size.height,
+      title: spec.title,
+      webPreferences: commonPrefs
+    });
+    bindDevtoolsShortcut(win);
+    bus.registerWindow(spec.id, win);
+    await win.loadFile(path.join(base, ...spec.htmlSegments));
+    return win;
+  }
 
-  // Dialer（外呼下发的响应方）
-  dialer = new BrowserWindow({ width: 480, height: 600, title: 'Dialer', webPreferences: commonPrefs });
-  bindDevtoolsShortcut(dialer);
-  bus.registerWindow('dialer', dialer);
-  await dialer.loadFile(path.join(base, 'renderer', 'dialer', 'index.html'));
+  // 创建各窗口（配置化）
+  workbench = await createAndRegisterWindow({
+    id: 'workbench',
+    title: 'Workbench',
+    size: { width: 1100, height: 800 },
+    htmlSegments: ['renderer', 'workbench', 'index.html']
+  });
 
-  // Partner:auto（接单响应 + 主动通知完成）
-  partnerAuto = new BrowserWindow({ width: 560, height: 620, title: 'Partner - Auto', webPreferences: commonPrefs });
-  bindDevtoolsShortcut(partnerAuto);
-  bus.registerWindow('partner:auto', partnerAuto);
-  await partnerAuto.loadFile(path.join(base, 'renderer', 'partner', 'auto', 'index.html'));
+  dialer = await createAndRegisterWindow({
+    id: 'dialer',
+    title: 'Dialer',
+    size: { width: 480, height: 600 },
+    htmlSegments: ['renderer', 'dialer', 'index.html']
+  });
 
-  // 其他 Partner 作为占位（仅日志展示，便于对比多窗体同步）
-  partnerCredit = new BrowserWindow({ width: 480, height: 520, title: 'Partner - Credit (placeholder)', webPreferences: commonPrefs });
-  bindDevtoolsShortcut(partnerCredit);
-  bus.registerWindow('partner:credit', partnerCredit);
-  await partnerCredit.loadFile(path.join(base, 'renderer', 'partner', 'credit', 'index.html'));
+  partnerAuto = await createAndRegisterWindow({
+    id: 'partner:auto',
+    title: 'Partner - Auto',
+    size: { width: 560, height: 620 },
+    htmlSegments: ['renderer', 'partner', 'auto', 'index.html']
+  });
 
-  partnerConsumer = new BrowserWindow({ width: 480, height: 520, title: 'Partner - Consumer (placeholder)', webPreferences: commonPrefs });
-  bindDevtoolsShortcut(partnerConsumer);
-  bus.registerWindow('partner:consumer', partnerConsumer);
-  await partnerConsumer.loadFile(path.join(base, 'renderer', 'partner', 'consumer', 'index.html'));
+  partnerCredit = await createAndRegisterWindow({
+    id: 'partner:credit',
+    title: 'Partner - Credit (placeholder)',
+    size: { width: 480, height: 520 },
+    htmlSegments: ['renderer', 'partner', 'credit', 'index.html']
+  });
 
-  partnerRisk = new BrowserWindow({ width: 480, height: 520, title: 'Partner - Risk (placeholder)', webPreferences: commonPrefs });
-  bindDevtoolsShortcut(partnerRisk);
-  bus.registerWindow('partner:risk', partnerRisk);
-  await partnerRisk.loadFile(path.join(base, 'renderer', 'partner', 'risk', 'index.html'));
+  partnerConsumer = await createAndRegisterWindow({
+    id: 'partner:consumer',
+    title: 'Partner - Consumer (placeholder)',
+    size: { width: 480, height: 520 },
+    htmlSegments: ['renderer', 'partner', 'consumer', 'index.html']
+  });
+
+  partnerRisk = await createAndRegisterWindow({
+    id: 'partner:risk',
+    title: 'Partner - Risk (placeholder)',
+    size: { width: 480, height: 520 },
+    htmlSegments: ['renderer', 'partner', 'risk', 'index.html']
+  });
 
   // 调试：确认 __bus 是否注入（检查 workbench）
   try {
@@ -87,13 +116,13 @@ async function createWindows() {
     console.log('[main] window.__bus exists (workbench)?', hasBus);
   } catch (e) { console.error('[main] executeJavaScript check failed', e); }
 
-  const clear = (name: string) => () => { (global as any)[name] = null; };
-  workbench.on('closed', clear('workbench'));
-  dialer.on('closed', clear('dialer'));
-  partnerAuto.on('closed', clear('partnerAuto'));
-  partnerCredit.on('closed', clear('partnerCredit'));
-  partnerConsumer.on('closed', clear('partnerConsumer'));
-  partnerRisk.on('closed', clear('partnerRisk'));
+  // 关闭引用清理
+  workbench.on('closed', () => { workbench = null; });
+  dialer.on('closed', () => { dialer = null; });
+  partnerAuto.on('closed', () => { partnerAuto = null; });
+  partnerCredit.on('closed', () => { partnerCredit = null; });
+  partnerConsumer.on('closed', () => { partnerConsumer = null; });
+  partnerRisk.on('closed', () => { partnerRisk = null; });
 }
 
 // —— 主进程仅处理“客户锁定、风控校验”（新示例 2 与 5） ——
