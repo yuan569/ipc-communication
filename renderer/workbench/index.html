@@ -1,0 +1,104 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <title>Workbench</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' data:; img-src 'self' data:;">
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1>Workbench <span class="badge">新示例</span></h1>
+
+      <div class="grid">
+        <!-- 基础输入 -->
+        <section class="card panel" style="grid-column: span 12">
+          <div class="section-title">
+            <h3>Inputs</h3>
+            <span class="section-desc">外呼号码 / 客户ID / 工单ID / 金额</span>
+          </div>
+          <div class="row">
+            <label>Tel:<br/><input id="tel" type="text" placeholder="13800000000" /></label>
+            <label>CustomerId:<br/><input id="customerId" type="text" placeholder="C-001" /></label>
+            <label>TicketId:<br/><input id="ticketId" type="text" placeholder="T-100" /></label>
+            <label>Amount:<br/><input id="amount" type="text" placeholder="5000" /></label>
+          </div>
+        </section>
+
+        <!-- 1 外呼下发：Workbench ⇄ Dialer（request/response） -->
+        <section class="card panel rr" style="grid-column: span 6">
+          <div class="section-title">
+            <h3>1) 外呼下发</h3>
+            <span class="badge">Workbench ⇄ Dialer</span>
+          </div>
+          <div class="section-desc">向 Dialer 发起 OUTBOUND_DISPATCH 请求，Dialer 决定是否接收并响应。</div>
+          <div class="row">
+            <button id="btn-outbound" class="btn primary">请求外呼下发</button>
+          </div>
+        </section>
+
+        <!-- 2 客户锁定：Workbench ⇄ Main（request/response） -->
+        <section class="card panel rr" style="grid-column: span 6">
+          <div class="section-title">
+            <h3>2) 客户锁定</h3>
+            <span class="badge">Workbench ⇄ Main</span>
+          </div>
+          <div class="section-desc">向主进程发起 LOCK_CUSTOMER 请求，返回是否锁定成功。</div>
+          <div class="row">
+            <button id="btn-lock" class="btn success">请求客户锁定</button>
+          </div>
+        </section>
+
+        <!-- 3 工单流转（接单）：Workbench ⇄ Partner（request/response） -->
+        <section class="card panel rr" style="grid-column: span 6">
+          <div class="section-title">
+            <h3>3) 工单流转（接单）</h3>
+            <span class="badge">Workbench ⇄ Partner:auto</span>
+          </div>
+          <div class="section-desc">向 Partner:auto 发起 TICKET_ACCEPT 请求，Partner 响应是否接单。</div>
+          <div class="row">
+            <button id="btn-accept" class="btn warning">请求工单接单</button>
+          </div>
+        </section>
+
+        <!-- 4 工单处理完成：Partner（auto） → Workbench（emit） -->
+        <section class="card panel broadcast" style="grid-column: span 6">
+          <div class="section-title">
+            <h3>4) 工单处理完成</h3>
+            <span class="badge">Partner:auto → Workbench</span>
+          </div>
+          <div class="section-desc">Partner:auto 处理完成后主动 emit TICKET_DONE（此处仅展示接收日志）。</div>
+          <div class="row">
+            <span class="badge">监听事件：TICKET_DONE</span>
+          </div>
+        </section>
+
+        <!-- 5 风控校验：Workbench ⇄ Main（request/response） -->
+        <section class="card panel rr" style="grid-column: span 12">
+          <div class="section-title">
+            <h3>5) 风控校验</h3>
+            <span class="badge">Workbench ⇄ Main</span>
+          </div>
+          <div class="section-desc">向主进程发起 RISK_CHECK 请求，返回通过与评分。</div>
+          <div class="row">
+            <button id="btn-risk" class="btn danger">请求风控校验</button>
+          </div>
+        </section>
+
+        <!-- Logs -->
+        <section class="card panel logs" style="grid-column: span 12">
+          <div class="section-title">
+            <h3>Logs</h3>
+            <div class="row">
+              <button id="btn-clear" class="btn ghost">Clear</button>
+            </div>
+          </div>
+          <pre id="log" class="log"></pre>
+        </section>
+      </div>
+    </div>
+
+    <script src="../../dist-umd/event-bus-client.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
