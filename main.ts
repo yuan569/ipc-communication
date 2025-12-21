@@ -2,6 +2,7 @@ import { app, BrowserWindow } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { createEventBus } from './event-bus-core';
+import type { EventMap } from './shared/types';
 
 /**
  * 主进程入口（Electron Main）
@@ -9,7 +10,7 @@ import { createEventBus } from './event-bus-core';
  * - 简易状态：本文件内仅保留与新示例相关的状态（locks/risk 缓存）
  * - 多窗口：Workbench、Dialer、Partner:auto（另外 partner:credit/consumer/risk 仅占位展示日志）
  */
-const bus = createEventBus<Record<string, any>>();
+const bus = createEventBus<EventMap>();
 
 // —— 极简状态（与新场景相关） ——
 const state = {
@@ -127,22 +128,22 @@ async function createWindows() {
 
 // —— 主进程仅处理“客户锁定、风控校验”（新示例 2 与 5） ——
 // 2) 客户锁定：Workbench ⇄ Main（request/response）
-bus.on('LOCK_CUSTOMER' as any, (e: any) => {
+bus.on('LOCK_CUSTOMER', (e) => {
   console.log('[main][LOCK_CUSTOMER][req]', e?.payload);
   setTimeout(() => {
-    const customerId = e?.payload?.customerId;
+    const customerId = (e as any)?.payload?.customerId as string;
     const locked = Boolean(customerId);
     if (locked) state.locks.customers.set(customerId, 'workbench');
-    bus.emit({ id: v4(), type: e.type, domain: e.domain, source: 'main', payload: { locked, customerId, ts: Date.now() }, ts: Date.now(), replyTo: e.id });
+    bus.emit({ id: v4(), type: e.type, domain: e.domain, source: 'main', payload: { locked, customerId, ts: Date.now() }, ts: Date.now(), replyTo: e.id } as any);
   }, 200);
 });
 
 // 5) 风控校验：Workbench ⇄ Main（request/response）
-bus.on('RISK_CHECK' as any, (e: any) => {
-  console.log('[main][RISK_CHECK][req]', e?.payload);
+bus.on('RISK_CHECK', (e) => {
+  console.log('[main][RISK_CHECK][req]', (e as any)?.payload);
   setTimeout(() => {
-    const amount = Number(e?.payload?.amount) || 0;
-    const key = `${e?.payload?.customerId || 'na'}:${amount}`;
+    const amount = Number((e as any)?.payload?.amount) || 0;
+    const key = `${(e as any)?.payload?.customerId || 'na'}:${amount}`;
     let cached = state.caches.risk.get(key);
     if (!cached) {
       const passed = amount <= 10000;
@@ -150,7 +151,7 @@ bus.on('RISK_CHECK' as any, (e: any) => {
       cached = { passed, score, amount, ts: Date.now() };
       state.caches.risk.set(key, cached);
     }
-    bus.emit({ id: v4(), type: e.type, domain: e.domain, source: 'main', payload: cached, ts: Date.now(), replyTo: e.id });
+    bus.emit({ id: v4(), type: e.type, domain: e.domain, source: 'main', payload: cached, ts: Date.now(), replyTo: e.id } as any);
   }, 300);
 });
 
