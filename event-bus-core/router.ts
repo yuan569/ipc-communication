@@ -1,35 +1,44 @@
-import type { BusEvent, Domain, Target } from '../shared/types'
+import type { BusEvent, Domain, Target } from '../shared/types';
 
-// 事件类型 → 约定域
-const domainByType: Record<string, Domain> = {
-  OUTBOUND_DISPATCH: 'cti',
-  CALL_START: 'cti',
-  LOCK_CUSTOMER: 'crm',
-  TICKET_ACCEPT: 'ticket',
-  TICKET_DONE: 'ticket',
-  RISK_CHECK: 'risk',
-  RISK_RESULT: 'risk',
-  CONTEXT_UPDATED: 'context',
-  LOG: 'demo',
+// —— 动态策略载入（可热更新） ——
+interface Policy {
+  domain: Record<Domain, { types: string[] }>;
+  type: Record<string, { sources?: string[]; targets?: Target[] }>;
+}
+
+// 默认内联策略（满足当前 5 个场景）
+let policy: Policy = {
+  domain: {
+    cti:     { types: ['OUTBOUND_DISPATCH', 'CALL_START'] },
+    crm:     { types: ['LOCK_CUSTOMER'] },
+    ticket:  { types: ['TICKET_ACCEPT', 'TICKET_DONE'] },
+    risk:    { types: ['RISK_CHECK', 'RISK_RESULT'] },
+    context: { types: ['CONTEXT_UPDATED'] },
+    demo:    { types: ['LOG'] },
+  } as any,
+  type: {
+    OUTBOUND_DISPATCH: { sources: ['workbench'], targets: ['dialer'] },
+    LOCK_CUSTOMER:     { sources: ['workbench'], targets: ['main'] },
+    TICKET_ACCEPT:     { sources: ['workbench'], targets: ['partner:auto'] },
+    TICKET_DONE:       { sources: ['partner:auto'], targets: ['workbench'] },
+    RISK_CHECK:        { sources: ['workbench'], targets: ['main'] },
+  },
 };
 
-// 可选：来源白名单（仅对关键请求进行限定）
-const allowedSources: Record<string, string[] | undefined> = {
-  OUTBOUND_DISPATCH: ['workbench'],
-  LOCK_CUSTOMER: ['workbench'],
-  TICKET_ACCEPT: ['workbench'],
-  RISK_CHECK: ['workbench'],
-  TICKET_DONE: ['partner:auto', 'main'],
-};
-
-// 可选：目标白名单（仅对需要固定目标的事件进行限定）
-const allowedTargets: Record<string, Target[] | undefined> = {
-  OUTBOUND_DISPATCH: ['dialer'],
-  LOCK_CUSTOMER: ['main'],
-  TICKET_ACCEPT: ['partner:auto'],
-  RISK_CHECK: ['main'],
-  TICKET_DONE: ['workbench'],
-};
+// 热加载策略文件（可选）
+import * as fs from 'fs';
+import * as path from 'path';
+const policyPath = path.join(process.cwd(), 'router-policy.json');
+if (fs.existsSync(policyPath)) {
+  try { policy = JSON.parse(fs.readFileSync(policyPath, 'utf8')); } catch (e) { console.error('[router] load policy error', e); }
+  // 监听文件变更自动热更新
+  fs.watchFile(policyPath, () => {
+    try {
+      policy = JSON.parse(fs.readFileSync(policyPath, 'utf8'));
+      console.log('[router] policy reloaded');
+    } catch (e) { console.error('[router] reload error', e); }
+  });
+}
 
 export function validateEvent(event: BusEvent) {
   // 基础字段校验
@@ -37,21 +46,22 @@ export function validateEvent(event: BusEvent) {
     throw new Error('非法事件格式');
   }
 
-  // 域校验：type 对应的 domain 必须一致
-  const expectedDomain = domainByType[event.type];
-  if (expectedDomain && event.domain !== expectedDomain) {
-    throw new Error(`事件域不匹配: ${event.type} 应属于 ${expectedDomain}，实际 ${event.domain}`);
+  // —— 域校验 ——
+  const domainRule = policy.domain[event.domain as Domain];
+  if (!domainRule) throw new Error(`未知 domain: ${event.domain}`);
+  if (!domainRule.types.includes(event.type)) {
+    throw new Error(`事件 ${event.type} 不属于 domain ${event.domain}`);
   }
 
-  // 来源白名单（仅对有约束的事件检查）
-  const src = allowedSources[event.type];
-  if (src && !src.includes(event.source)) {
-    throw new Error(`非法来源: ${event.source} 不允许发送 ${event.type}`);
+  // —— 来源白名单 ——
+  const allowSrc = policy.type[event.type]?.sources;
+  if (allowSrc && !allowSrc.includes(event.source)) {
+    throw new Error(`非法来源: ${event.source} 无权发送 ${event.type}`);
   }
 
-  // 目标白名单（仅当事件声明了 target 且存在约束时检查）
-  const tgts = allowedTargets[event.type];
-  if (tgts && event.target && !tgts.includes(event.target)) {
-    throw new Error(`非法目标: ${String(event.target)} 不允许接收 ${event.type}`);
+  // —— 目标白名单 ——
+  const allowTgt = policy.type[event.type]?.targets;
+  if (allowTgt && event.target && !allowTgt.includes(event.target as Target)) {
+    throw new Error(`非法目标: ${String(event.target)} 不能接收 ${event.type}`);
   }
 }
