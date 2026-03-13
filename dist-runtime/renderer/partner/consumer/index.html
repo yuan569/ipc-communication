@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <title>Partner - Consumer</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' data:; img-src 'self' data:;">
+    <link rel="stylesheet" href="../../styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1>Partner: Consumer <span class="badge">消金</span></h1>
+      <section class="card panel rr">
+        <div class="section-title"><h3>消费贷申请</h3><span class="section-desc">示例：提交消费贷并查看主进程模拟结果</span></div>
+        <div class="row">
+          <label>Amount:<br/><input id="amount" type="text" placeholder="15000"/></label>
+          <label>Term (m):<br/><input id="term" type="text" placeholder="12"/></label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="btn-apply" class="btn primary">提交消费贷申请</button>
+        </div>
+      </section>
+      <section class="card panel logs">
+        <div class="section-title"><h3>Logs</h3><button id="btn-clear" class="btn ghost">Clear</button></div>
+        <pre id="log" class="log"></pre>
+      </section>
+    </div>
+    <script src="../../../dist-umd/event-bus-client.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
+

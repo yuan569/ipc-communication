@@ -1,5 +1,11 @@
-export type Domain = 'cti' | 'crm' | 'ticket' | 'risk' | 'context' | 'demo';
-export type Target = 'workbench' | 'dialer' | 'partner:auto' | 'partner:credit' | 'partner:consumer' | 'partner:risk' | '*' | 'main';
+/**
+ * 共享类型与事件契约（主进程与渲染端共用）
+ * - BusEvent / EventMap / RequestMap / ResponseMap：供主进程、渲染端、路由校验统一引用
+ * - BusErrorCode：稳定错误码，便于调用方按码分支；主进程通过 normalizeBusError 归一化异常消息
+ */
+import type { Domain, Target } from './protocol';
+
+export type { Domain, EventType, Target, WindowIdentity } from './protocol';
 
 export interface BusEvent<T = any> {
   id: string;
@@ -9,10 +15,12 @@ export interface BusEvent<T = any> {
   target?: Target;        // 目标窗口名或广播 '*', 或 'main'（主进程）
   payload: T;
   ts: number;
-  replyTo?: string;       // 若为响应消息，指向原请求 id
+  replyTo?: string;       // 若为响应消息，指向原请求 id；请求/响应统一为同 type + replyTo，无独立响应事件类型
 }
 
 // 事件-负载映射（用于 on/emit 的类型提示）
+// 约定：request/response 一律用「响应事件 type 与请求相同 + replyTo 指回请求 id」，不定义 *_RESULT 类独立响应事件。
+// 出现在 RequestMap 中的事件，本表 payload 表示请求体，响应体形状见 ResponseMap。
 export type EventMap = {
   // CTI（Workbench ⇄ Dialer）
   OUTBOUND_DISPATCH: { tel: string };
@@ -25,9 +33,8 @@ export type EventMap = {
   TICKET_ACCEPT: { ticketId: string };
   TICKET_DONE: { ticketId: string; by: string; ts?: number };
 
-  // Risk（Workbench ⇄ Main）
+  // Risk（Workbench ⇄ Main）：请求与响应均为 type=RISK_CHECK，响应通过 replyTo 关联；payload 请求态见本项，响应态见 ResponseMap.RISK_CHECK
   RISK_CHECK: { customerId: string; amount: number };
-  RISK_RESULT: { passed: boolean; score: number; amount: number; customerId?: string };
 
   // 上下文广播（可选）
   CONTEXT_UPDATED: {
@@ -61,14 +68,26 @@ export type EmitOptions = {
   ack?: boolean;
 };
 
+export type BusErrorCode =
+  | 'timeout'
+  | 'over_capacity'
+  | 'invalid_event'
+  | 'unknown_domain'
+  | 'invalid_domain_type'
+  | 'unauthorized_source'
+  | 'invalid_target'
+  | 'unknown_sender'
+  | 'internal_error';
+
 export interface BusResponse<T = any> {
   ok: boolean;
   data?: T;
-  error?: string;
+  error?: BusErrorCode;
 }
 
 export interface BusAck {
   id: string;
+  error?: BusErrorCode;
 }
 
 export type RequestOptions = {

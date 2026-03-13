@@ -1,8 +1,5 @@
-/**
- * Workbench 主控台
- * 职责：发起外呼、客户锁定、工单接单、风控校验等请求，并监听 Partner:auto 的 TICKET_DONE。
- */
 (function() {
+  // Workbench: 展示五类通信模式的发起方/接收方
   const $ = (id) => document.getElementById(id);
   function log(...args) { const m=args.map(a=>typeof a==='string'?a:JSON.stringify(a)); const line=m.join(' '); console.log(line); const el=$('log'); if(el){ el.textContent+=line+'\n'; el.scrollTop=el.scrollHeight; } }
   function clearLog(){ const el=$('log'); if(el) el.textContent=''; }

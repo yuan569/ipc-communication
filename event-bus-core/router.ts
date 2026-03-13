@@ -1,29 +1,19 @@
-import type { BusEvent, Domain, Target } from '../shared/types';
+/**
+ * 事件路由校验
+ * 按共享协议（或 router-policy.json 覆盖）校验事件的 domain、type、source、target。
+ * 所有来自 renderer 的事件在进入 emit 流程前必须通过 validateEvent。
+ */
+import type { BusEvent } from '../shared/types';
+import { BUS_POLICY, type Domain, type Target } from '../shared/protocol';
 
-// —— 动态策略载入（可热更新） ——
+// —— 动态策略载入（可选）：项目根目录下 router-policy.json 存在时覆盖默认策略 ——
 interface Policy {
-  domain: Record<Domain, { types: string[] }>;
-  type: Record<string, { sources?: string[]; targets?: Target[] }>;
+  domain: Record<Domain, { types: readonly string[] }>;
+  type: Record<string, { sources?: readonly string[]; targets?: readonly Target[] }>;
 }
 
-// 默认内联策略（满足当前 5 个场景）
-let policy: Policy = {
-  domain: {
-    cti:     { types: ['OUTBOUND_DISPATCH', 'CALL_START'] },
-    crm:     { types: ['LOCK_CUSTOMER'] },
-    ticket:  { types: ['TICKET_ACCEPT', 'TICKET_DONE'] },
-    risk:    { types: ['RISK_CHECK', 'RISK_RESULT'] },
-    context: { types: ['CONTEXT_UPDATED'] },
-    demo:    { types: ['LOG'] },
-  } as any,
-  type: {
-    OUTBOUND_DISPATCH: { sources: ['workbench'], targets: ['dialer'] },
-    LOCK_CUSTOMER:     { sources: ['workbench'], targets: ['main'] },
-    TICKET_ACCEPT:     { sources: ['workbench'], targets: ['partner:auto'] },
-    TICKET_DONE:       { sources: ['partner:auto'], targets: ['workbench'] },
-    RISK_CHECK:        { sources: ['workbench'], targets: ['main'] },
-  },
-};
+// 默认策略来自共享协议，避免路由层和类型层各维护一份事实来源。
+let policy: Policy = BUS_POLICY;
 
 // 热加载策略文件（可选）
 import * as fs from 'fs';

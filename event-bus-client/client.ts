@@ -32,11 +32,11 @@ export function createBusClient<
   Req extends Record<string, any> = RequestMap,
   Res extends Record<string, any> = ResponseMap
 >(identity: string) {
-  // 针对每个事件类型维护一组处理器（Set 避免重复注册，且便于删除）
+  // 每个 event.type 对应一组 handler，避免对 window.__bus.on 重复订阅
   type Handler<K extends keyof EM & string> = (event: BusEvent<EM[K]>) => void;
   const registry = new Map<string, Set<(e: BusEvent<any>) => void>>();
 
-  // 是否已订阅底层 __bus 事件，仅需订阅一次，后续在本地二次分发
+  // 仅订阅一次 window.__bus.on，收到事件后按 type 分发到 registry 中对应 handler
   let subscribed = false;
 
   function ensureSubscribed() {

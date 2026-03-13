@@ -1,8 +1,5 @@
-/**
- * Partner:auto 工单窗
- * 职责：监听 TICKET_ACCEPT 请求并 respond；接单后延时 emit TICKET_DONE 通知 Workbench。
- */
 (function(){
+  // Partner:auto 作为 TICKET_ACCEPT 的响应方，并在接单后主动 emit TICKET_DONE → workbench
   const $ = (id) => document.getElementById(id);
   function log(...args){ const m=args.map(a=>typeof a==='string'?a:JSON.stringify(a)); const line=m.join(' '); console.log(line); const el=$('log'); if(el){ el.textContent+=line+'\n'; el.scrollTop=el.scrollHeight; } }
   const bus = window.BusClient?.createBusClient?.('partner:auto') || null;

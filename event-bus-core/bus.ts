@@ -1,8 +1,12 @@
-import { BrowserWindow, ipcMain } from 'electron';
+import { BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
-import { BusEvent, BusResponse, RequestOptions } from '../shared/types';
+import { BusEvent, BusResponse, RequestOptions, type BusErrorCode } from '../shared/types';
+import type { WindowIdentity } from '../shared/protocol';
 import { auditLog } from './audit';
+import { normalizeBusError } from './errors';
+import { createRequestTracker } from './request-tracker';
 import { validateEvent } from './router';
+import { assertSenderIdentity } from './sender-auth';
 
 /**
  * 事件总线（主进程）
@@ -23,6 +27,8 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
    * 已注册的窗口列表（按窗口名索引），用于向对应 Renderer 分发事件
    */
   const windows = new Map<string, BrowserWindow>();
+  // sender 与窗口 identity 的绑定只保存在主进程，避免信任 renderer 自报身份。
+  const senderIdentityByWebContentsId = new Map<number, WindowIdentity>();
 
   /**
    * 事件处理器注册表：key 为事件 type，value 为该 type 下的处理函数集合
@@ -42,8 +48,12 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
    */
   function registerWindow(name: string, win: BrowserWindow) {
     windows.set(name, win);
+    senderIdentityByWebContentsId.set(win.webContents.id, name as WindowIdentity);
     // 当窗口关闭时，从列表中移除
-    win.on('closed', () => windows.delete(name));
+    win.on('closed', () => {
+      windows.delete(name);
+      senderIdentityByWebContentsId.delete(win.webContents.id);
+    });
   }
 
   /**
@@ -86,8 +96,7 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
     }
   }
 
-  // 请求等待表：key=原请求 id，value=resolve 函数与超时
-  const pending = new Map<string, { resolve: (res: BusResponse<any>) => void; timer: NodeJS.Timeout; createdAt: number; expireAt: number }>();
+  const requestTracker = createRequestTracker({ capacity: PENDING_CAP });
 
   /**
    * 发送事件（主进程内调用）
@@ -95,13 +104,7 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
    */
   function emit<K extends keyof EM & string>(event: BusEvent<EM[K]>) {
     // 若为响应（带 replyTo），优先完成等待中的请求
-    if (event.replyTo && pending.has(event.replyTo)) {
-      const p = pending.get(event.replyTo)!;
-      clearTimeout(p.timer);
-      pending.delete(event.replyTo);
-      p.resolve({ ok: true, data: (event as any).payload });
-      return; // 响应消息不再继续分发
-    }
+    if (requestTracker.resolveReply(event.replyTo, (event as any).payload)) return;
 
     // 1) 事件校验（来源/域/字段等规则）
     validateEvent(event);
@@ -149,20 +152,13 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
     if (!event.id) event.id = uuidv4();
 
     // 容量守卫
-    if (pending.size >= PENDING_CAP) {
-      return Promise.resolve({ ok: false, error: 'over_capacity' });
-    }
-
     return new Promise<BusResponse<T>>((resolve) => {
-      const now = Date.now();
-      const timer = setTimeout(() => {
-        const p = pending.get(event.id);
-        if (p) {
-          pending.delete(event.id);
-          resolve({ ok: false, error: 'timeout' });
-        }
-      }, timeout);
-      pending.set(event.id, { resolve: resolve as any, timer, createdAt: now, expireAt: now + timeout });
+      // requestTracker 负责超时与 replyTo 生命周期；bus 本身只负责编排。
+      const registrationError = requestTracker.register(event.id, timeout, resolve as any);
+      if (registrationError) {
+        resolve(registrationError);
+        return;
+      }
       emit(event as any);
     });
   }
@@ -170,51 +166,48 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
 
 
   // IPC 桥接：接收来自 Renderer 的 "bus:emit"，交由主进程 emit 统一处理
-  ipcMain.on('bus:emit', (_, event: BusEvent<any>) => {
+  ipcMain.on('bus:emit', (ipcEvent, event: BusEvent<any>) => {
     // console.log('[handle:bus-emit][event]', event);
     try {
+      // 所有来自 renderer 的入口都先做 sender 校验，再进入统一总线流程。
+      assertSenderIdentity(senderIdentityByWebContentsId, ipcEvent.sender.id, event);
       emit(event as any);
     } catch (err) {
-      try { console.error('[bus][emit][error]', err); } catch {}
+      try { console.error('[bus][emit][error]', normalizeBusError(err), err); } catch {}
     }
   });
 
   // IPC 桥接（ACK）：仅返回分发确认，不等待业务响应
-  ipcMain.handle('bus:ack', async (_evt, event: BusEvent<any>) => {
+  ipcMain.handle('bus:ack', async (ipcEvent, event: BusEvent<any>) => {
     // console.log('[handle:bus-ack][event]', event);
     try {
       if (!event.id) event.id = uuidv4();
+      assertSenderIdentity(senderIdentityByWebContentsId, ipcEvent.sender.id, event);
       // 走统一 emit 流程（校验/审计/主进程处理/分发），但不等待任何业务响应
       emit(event as any);
       return { id: event.id };
     } catch (err: any) {
-      return { id: event?.id, error: String(err?.message || err) };
+      return { id: event?.id, error: normalizeBusError(err) };
     }
   });
 
   // IPC 桥接（REQUEST）：等待业务响应（通过 replyTo=原 id 的事件触发）
-  ipcMain.handle('bus:request', async (_evt, event: BusEvent<any>, options?: RequestOptions) => {
+  ipcMain.handle('bus:request', async (ipcEvent, event: BusEvent<any>, options?: RequestOptions) => {
     // console.log('[handle:bus-request][event]', event);
     try {
+      assertSenderIdentity(senderIdentityByWebContentsId, ipcEvent.sender.id, event);
       return await request(event, options);
     } catch (err: any) {
-      return { ok: false, error: String(err?.message || err) };
+      return { ok: false, error: normalizeBusError(err) };
     }
   });
 
   // 定期清扫 pending，防御异常堆积
   setInterval(() => {
-    const now = Date.now();
-    let cleaned = 0;
-    for (const [id, p] of pending) {
-      if (p.expireAt <= now) {
-        try { clearTimeout(p.timer); } catch {}
-        pending.delete(id);
-        cleaned++;
-      }
-    }
+    const cleaned = requestTracker.sweepExpired();
     if (cleaned > 0) {
-      try { console.warn(`[bus][sweep] cleaned ${cleaned}, remaining ${pending.size}`); } catch {}
+      // 这里出现日志通常意味着某些请求没有正常回包，便于排查 handler 或 renderer 问题。
+      try { console.warn(`[bus][sweep] cleaned ${cleaned}, remaining ${requestTracker.size()}`); } catch {}
     }
   }, SWEEP_INTERVAL_MS).unref?.();
 
