@@ -1,7 +1,12 @@
-import { BrowserWindow, ipcMain } from 'electron';
-import { BusEvent } from '../shared/types.ts';
+import { BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
+import { v4 as uuidv4 } from 'uuid';
+import { BusEvent, BusResponse, RequestOptions, type BusErrorCode } from '../shared/types';
+import type { WindowIdentity } from '../shared/protocol';
 import { auditLog } from './audit';
+import { normalizeBusError } from './errors';
+import { createRequestTracker } from './request-tracker';
 import { validateEvent } from './router';
+import { assertSenderIdentity } from './sender-auth';
 
 /**
  * 事件总线（主进程）
@@ -22,12 +27,19 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
    * 已注册的窗口列表（按窗口名索引），用于向对应 Renderer 分发事件
    */
   const windows = new Map<string, BrowserWindow>();
+  // sender 与窗口 identity 的绑定只保存在主进程，避免信任 renderer 自报身份。
+  const senderIdentityByWebContentsId = new Map<number, WindowIdentity>();
 
   /**
    * 事件处理器注册表：key 为事件 type，value 为该 type 下的处理函数集合
    * 使用 Set 避免重复注册同一函数，同时方便删除
    */
   const handlers = new Map<string, Set<(event: BusEvent<any>) => void>>();
+
+  // 参数与守卫
+  const PENDING_CAP = 1000; // 最大并发请求等待数
+  const SWEEP_INTERVAL_MS = 60_000; // 定期清扫周期
+
 
   /**
    * 注册窗口引用，便于后续按目标名定向分发事件
@@ -36,8 +48,12 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
    */
   function registerWindow(name: string, win: BrowserWindow) {
     windows.set(name, win);
+    senderIdentityByWebContentsId.set(win.webContents.id, name as WindowIdentity);
     // 当窗口关闭时，从列表中移除
-    win.on('closed', () => windows.delete(name));
+    win.on('closed', () => {
+      windows.delete(name);
+      senderIdentityByWebContentsId.delete(win.webContents.id);
+    });
   }
 
   /**
@@ -80,18 +96,29 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
     }
   }
 
+  const requestTracker = createRequestTracker({ capacity: PENDING_CAP });
+
   /**
    * 发送事件（主进程内调用）
    * 流程：校验 -> 审计 -> 主进程内部处理 -> 分发给 Renderer
    */
   function emit<K extends keyof EM & string>(event: BusEvent<EM[K]>) {
+    // 若为响应（带 replyTo），优先完成等待中的请求
+    if (requestTracker.resolveReply(event.replyTo, (event as any).payload)) return;
+
     // 1) 事件校验（来源/域/字段等规则）
     validateEvent(event);
     // 2) 审计日志（可替换为 ELK/Kafka 等）
     auditLog(event);
 
     // 3) 主进程内部处理（仅调用注册在主进程的 handlers）
-    (handlers.get(event.type as string) || new Set()).forEach(fn => fn(event as any));
+    (handlers.get(event.type as string) || new Set()).forEach(fn => {
+      try {
+        fn(event as any);
+      } catch (err) {
+        try { console.error('[bus][handler][error]', err); } catch {}
+      }
+    });
 
     // 4) 分发给 Renderer（目标窗口或广播）
     dispatch(event as any);
@@ -113,8 +140,76 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
     }
   }
 
-  // IPC 桥接：接收来自 Renderer 的 "bus:emit"，交由主进程 emit 统一处理
-  ipcMain.on('bus:emit', (_, event: BusEvent<any>) => emit(event as any));
+  /**
+   * 请求（支持 ack/request-response + 超时）
+   * - ack: true => 分发后立即返回 ack
+   * - ack: false/默认 => 等待某个 Renderer 使用 replyTo=原 id 发回响应
+   */
+  function request<T = any>(event: BusEvent<any>, options?: RequestOptions): Promise<BusResponse<T>> {
+    const timeout = (options?.timeout ?? 10000);
 
-  return { registerWindow, on, once, off, emit };
+    // 补齐必要字段（若调用方未补齐）
+    if (!event.id) event.id = uuidv4();
+
+    // 容量守卫
+    return new Promise<BusResponse<T>>((resolve) => {
+      // requestTracker 负责超时与 replyTo 生命周期；bus 本身只负责编排。
+      const registrationError = requestTracker.register(event.id, timeout, resolve as any);
+      if (registrationError) {
+        resolve(registrationError);
+        return;
+      }
+      emit(event as any);
+    });
+  }
+
+
+
+  // IPC 桥接：接收来自 Renderer 的 "bus:emit"，交由主进程 emit 统一处理
+  ipcMain.on('bus:emit', (ipcEvent, event: BusEvent<any>) => {
+    // console.log('[handle:bus-emit][event]', event);
+    try {
+      // 所有来自 renderer 的入口都先做 sender 校验，再进入统一总线流程。
+      assertSenderIdentity(senderIdentityByWebContentsId, ipcEvent.sender.id, event);
+      emit(event as any);
+    } catch (err) {
+      try { console.error('[bus][emit][error]', normalizeBusError(err), err); } catch {}
+    }
+  });
+
+  // IPC 桥接（ACK）：仅返回分发确认，不等待业务响应
+  ipcMain.handle('bus:ack', async (ipcEvent, event: BusEvent<any>) => {
+    // console.log('[handle:bus-ack][event]', event);
+    try {
+      if (!event.id) event.id = uuidv4();
+      assertSenderIdentity(senderIdentityByWebContentsId, ipcEvent.sender.id, event);
+      // 走统一 emit 流程（校验/审计/主进程处理/分发），但不等待任何业务响应
+      emit(event as any);
+      return { id: event.id };
+    } catch (err: any) {
+      return { id: event?.id, error: normalizeBusError(err) };
+    }
+  });
+
+  // IPC 桥接（REQUEST）：等待业务响应（通过 replyTo=原 id 的事件触发）
+  ipcMain.handle('bus:request', async (ipcEvent, event: BusEvent<any>, options?: RequestOptions) => {
+    // console.log('[handle:bus-request][event]', event);
+    try {
+      assertSenderIdentity(senderIdentityByWebContentsId, ipcEvent.sender.id, event);
+      return await request(event, options);
+    } catch (err: any) {
+      return { ok: false, error: normalizeBusError(err) };
+    }
+  });
+
+  // 定期清扫 pending，防御异常堆积
+  setInterval(() => {
+    const cleaned = requestTracker.sweepExpired();
+    if (cleaned > 0) {
+      // 这里出现日志通常意味着某些请求没有正常回包，便于排查 handler 或 renderer 问题。
+      try { console.warn(`[bus][sweep] cleaned ${cleaned}, remaining ${requestTracker.size()}`); } catch {}
+    }
+  }, SWEEP_INTERVAL_MS).unref?.();
+
+  return { registerWindow, on, once, off, emit, request };
 }

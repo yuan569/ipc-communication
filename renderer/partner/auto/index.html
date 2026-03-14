@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <title>Partner - Auto</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' data:; img-src 'self' data:;">
+    <link rel="stylesheet" href="../../styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1>Partner: Auto <span class="badge">Responder + Emitter</span></h1>
+      <section class="card panel rr">
+        <div class="section-title"><h3>接单（Responder）</h3><span class="section-desc">监听 TICKET_ACCEPT 请求并响应 { accepted }</span></div>
+        <div class="row"><span class="badge">Listening: TICKET_ACCEPT</span></div>
+      </section>
+      <section class="card panel broadcast">
+        <div class="section-title"><h3>处理完成（Emitter）</h3><span class="section-desc">接单后片刻主动 emit TICKET_DONE → workbench</span></div>
+        <div class="row"><span class="badge">Emit: TICKET_DONE → workbench</span></div>
+      </section>
+      <section class="card panel logs">
+        <div class="section-title"><h3>Logs</h3><button id="btn-clear" class="btn ghost">Clear</button></div>
+        <pre id="log" class="log"></pre>
+      </section>
+    </div>
+    <script src="../../../dist-umd/event-bus-client.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

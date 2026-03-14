@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <title>Dialer</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' data:; img-src 'self' data:;">
+    <link rel="stylesheet" href="../styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1>Dialer <span class="badge">Responder</span></h1>
+      <section class="card panel rr">
+        <div class="section-title">
+          <h3>外呼下发（Responder）</h3>
+          <span class="section-desc">接收 OUTBOUND_DISPATCH 请求，并响应是否接收：tel.length ≥ 7 即 accepted=true</span>
+        </div>
+        <div class="row">
+          <span class="badge">Listening: OUTBOUND_DISPATCH</span>
+        </div>
+      </section>
+      <section class="card panel logs">
+        <div class="section-title"><h3>Logs</h3><button id="btn-clear" class="btn ghost">Clear</button></div>
+        <pre id="log" class="log"></pre>
+      </section>
+    </div>
+    <script src="../../dist-umd/event-bus-client.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>
