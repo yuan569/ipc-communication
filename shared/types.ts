@@ -71,10 +71,13 @@ export type EmitOptions = {
 export type BusErrorCode =
   | 'timeout'
   | 'over_capacity'
+  | 'duplicate_request'
   | 'invalid_event'
   | 'unknown_domain'
   | 'invalid_domain_type'
   | 'unauthorized_source'
+  | 'unauthorized_reply'
+  | 'reply_type_mismatch'
   | 'invalid_target'
   | 'unknown_sender'
   | 'internal_error';

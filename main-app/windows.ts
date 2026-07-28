@@ -9,6 +9,8 @@ type WindowBus = {
 
 // 保留开发期常用快捷键，避免每个窗体重复手动打开 DevTools。
 function bindDevtoolsShortcut(win: BrowserWindow) {
+  // 仅开发态绑定，避免生产包仍可随意打开 DevTools。
+  if (app.isPackaged) return;
   win.webContents.on('before-input-event', (event, input) => {
     if (input.type === 'keyDown' && (input.key === 'F12' || (input.control && input.shift && (input.key === 'I' || input.key === 'i')))) {
       win.webContents.toggleDevTools();

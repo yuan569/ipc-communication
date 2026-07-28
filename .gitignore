@@ -18,6 +18,7 @@
 /out/
 /dist
 /dist-umd
+/dist-runtime
 
 # production
 /build

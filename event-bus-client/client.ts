@@ -13,7 +13,7 @@ declare global {
   interface Window {
     __bus: {
       emit: (e: any) => void;
-      on: (cb: (e: any) => void) => void;
+      on: (cb: (e: any) => void) => (() => void) | void;
       ack: (e: any) => Promise<{ id: string; error?: string } | import('../shared/types').BusAck>;
       request: (e: any, options?: RequestOptions) => Promise<BusResponse<any>>;
     }
@@ -38,15 +38,19 @@ export function createBusClient<
 
   // 仅订阅一次 window.__bus.on，收到事件后按 type 分发到 registry 中对应 handler
   let subscribed = false;
+  let unsubscribeBridge: (() => void) | null = null;
 
   function ensureSubscribed() {
     if (subscribed) return;
     subscribed = true;
-    window.__bus.on((event: BusEvent<any>) => {
+    const maybeOff = window.__bus.on((event: BusEvent<any>) => {
       const set = registry.get(event.type);
       if (!set || set.size === 0) return;
       set.forEach(fn => fn(event));
     });
+    if (typeof maybeOff === 'function') {
+      unsubscribeBridge = maybeOff;
+    }
   }
 
   // fire-and-forget
@@ -86,7 +90,10 @@ export function createBusClient<
     return window.__bus.request(full, options) as Promise<BusResponse<Res[K]>>;
   }
 
-  // 对某个请求事件进行响应（通过 replyTo 关联）
+  /**
+   * 对某个请求事件进行响应（通过 replyTo 关联）。
+   * 走 ack 通道，便于拿到 unauthorized_reply / reply_type_mismatch 等错误码。
+   */
   function respond<K extends keyof EM & string, R = any>(to: BusEvent<EM[K]>, payload: R) {
     const reply: BusEvent<R> = {
       id: uuidv4(),
@@ -97,7 +104,7 @@ export function createBusClient<
       ts: Date.now(),
       replyTo: to.id
     };
-    window.__bus.emit(reply);
+    return window.__bus.ack(reply) as Promise<BusAck>;
   }
 
   // 订阅相关 API
@@ -125,6 +132,12 @@ export function createBusClient<
       if (set.size === 0) registry.delete(type);
     } else {
       registry.delete(type);
+    }
+    // 本地无订阅时解除底层 IPC 监听，避免重复创建 client 叠监听。
+    if (registry.size === 0 && unsubscribeBridge) {
+      unsubscribeBridge();
+      unsubscribeBridge = null;
+      subscribed = false;
     }
   }
 

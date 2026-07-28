@@ -1,5 +1,8 @@
+/**
+ * Dialer 外呼窗
+ * 职责：监听 OUTBOUND_DISPATCH 请求，校验 tel 后通过 respond 回包；不主动发请求。
+ */
 (function(){
-  // Dialer 作为 OUTBOUND_DISPATCH 的响应方（Responder）
   const $ = (id) => document.getElementById(id);
   function log(...args){ const m=args.map(a=>typeof a==='string'?a:JSON.stringify(a)); const line=m.join(' '); console.log(line); const el=$('log'); if(el){ el.textContent+=line+'\n'; el.scrollTop=el.scrollHeight; } }
   const bus = window.BusClient?.createBusClient?.('dialer') || null;

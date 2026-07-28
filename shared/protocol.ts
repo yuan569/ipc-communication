@@ -50,6 +50,11 @@ export const EVENT_POLICY = {
     sources: ['workbench'],
     targets: ['dialer'],
   },
+  CALL_START: {
+    domain: 'cti',
+    sources: ['workbench'],
+    targets: ['*', 'dialer'],
+  },
   LOCK_CUSTOMER: {
     domain: 'crm',
     sources: ['workbench'],

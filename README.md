@@ -114,7 +114,7 @@ Renderer ──bus:request──▶ 主进程 requestTracker.register()
 | 事件类型 | Domain | 发起方 | 目标 | 模式 |
 |---|---|---|---|---|
 | `OUTBOUND_DISPATCH` | cti | workbench | dialer | Request/Response |
-| `CALL_START` | cti | workbench | — | Fire-and-forget |
+| `CALL_START` | cti | workbench | `*` / dialer | Fire-and-forget |
 | `LOCK_CUSTOMER` | crm | workbench | main | Request/Response |
 | `TICKET_ACCEPT` | ticket | workbench | partner:auto | Request/Response |
 | `TICKET_DONE` | ticket | partner:auto | workbench | Fire-and-forget |
@@ -224,7 +224,8 @@ npm test
 | 上下文隔离 | `BrowserWindow.webPreferences` | `contextIsolation: true`，`nodeIntegration: false` |
 | sender 身份校验 | `sender-auth.ts` | 主进程以 `webContents.id` 绑定真实 identity，拒绝伪造 `source` |
 | 协议白名单 | `router.ts` | 事件须通过 domain / type / source / target 四维校验 |
-| 响应容量守卫 | `request-tracker.ts` | pending 超出 1000 时立即返回 `over_capacity` |
+| 回包授权 | `request-tracker.ts` | 仅 `expectedResponder`（原请求 target）且 type 匹配时可完成 pending |
+| 响应容量守卫 | `request-tracker.ts` | pending 超出 1000 或重复 id 时立即返回错误 |
 
 ---
 
@@ -232,9 +233,9 @@ npm test
 
 只需改动以下 4 处，不改总线核心：
 
-1. **`shared/protocol.ts`** — 在 `WINDOW_IDENTITIES` 增加新窗体 id，视需要在 `DOMAIN_TYPES` 和 `EVENT_POLICY` 补充事件策略
-2. **`main-app/window-registry.ts`** — 在 `MAIN_WINDOW_REGISTRY` 增加一条窗体配置
-3. **`main-app/handlers.ts`** — 视需要注册主进程 handler
+1. **`shared/protocol.ts`** — 在 `WINDOW_IDENTITIES` 增加新窗体 id，视需要在 `DOMAIN_TYPES` 和 `EVENT_POLICY` 补充事件策略（二者须同步）
+2. **`main-app/window-registry.ts`** — 在 `MAIN_WINDOW_REGISTRY` 增加一条窗体配置；未就绪的窗体可设 `placeholder: true`（默认启动时跳过）
+3. **`main-app/handlers.ts`** — 视需要注册主进程 handler（仅 `target` 为 `main` / `*` 时会触发）
 4. **`renderer/<name>/`** — 新增 `index.html` 和 `app.js`
 
 ---

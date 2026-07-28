@@ -52,6 +52,9 @@ export const MAIN_WINDOW_REGISTRY: readonly WindowSpec[] = [
   },
 ] as const;
 
-export function getMainWindowSpecs() {
-  return MAIN_WINDOW_REGISTRY;
+export function getMainWindowSpecs(options?: { includePlaceholders?: boolean }) {
+  const includePlaceholders = options?.includePlaceholders === true;
+  if (includePlaceholders) return MAIN_WINDOW_REGISTRY;
+  // 默认跳过 placeholder，避免启动时打开未接入业务的空壳窗体。
+  return MAIN_WINDOW_REGISTRY.filter((spec) => !spec.placeholder);
 }
