@@ -52,42 +52,17 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
 
   /**
    * 订阅指定类型事件（可多次订阅）。返回值为取消订阅函数。
-   * @param type 事件类型（受 EM 泛型约束）
-   * @param handler 事件处理器，参数为完整 BusEvent
    */
   function on<K extends keyof EM & string>(type: K, handler: (event: BusEvent<EM[K]>) => void) {
     const set = handlers.get(type) || new Set();
     set.add(handler as (event: BusEvent<any>) => void);
     handlers.set(type, set);
-    // 返回取消订阅函数，便于调用方释放资源/避免内存泄漏
-    return () => off(type, handler as any);
-  }
-
-  /**
-   * 订阅一次性事件：触发一次后自动取消订阅
-   */
-  function once<K extends keyof EM & string>(type: K, handler: (event: BusEvent<EM[K]>) => void) {
-    const wrapper = (event: BusEvent<EM[K]>) => {
-      off(type, wrapper as any);
-      handler(event);
+    return () => {
+      const current = handlers.get(type);
+      if (!current) return;
+      current.delete(handler as any);
+      if (current.size === 0) handlers.delete(type);
     };
-    return on(type, wrapper as any);
-  }
-
-  /**
-   * 取消订阅
-   * @param type 要取消的事件类型
-   * @param handler 可选；若不传则清空该类型下的所有处理器
-   */
-  function off<K extends keyof EM & string>(type: K, handler?: (event: BusEvent<EM[K]>) => void) {
-    const set = handlers.get(type);
-    if (!set) return;
-    if (handler) {
-      set.delete(handler as any);
-      if (set.size === 0) handlers.delete(type);
-    } else {
-      handlers.delete(type);
-    }
   }
 
   const requestTracker = createRequestTracker({ capacity: PENDING_CAP });
@@ -153,9 +128,7 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
   }
 
   /**
-   * 请求（支持 ack/request-response + 超时）
-   * - ack: true => 分发后立即返回 ack
-   * - ack: false/默认 => 等待某个 Renderer 使用 replyTo=原 id 发回响应
+   * 请求-响应：注册 pending，等待目标用同 type + replyTo 回包；支持超时与容量限制。
    */
   function request<T = any>(event: BusEvent<any>, options?: RequestOptions): Promise<BusResponse<T>> {
     const timeout = (options?.timeout ?? 10000);
@@ -236,5 +209,5 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
     }
   }, SWEEP_INTERVAL_MS).unref?.();
 
-  return { registerWindow, on, once, off, emit, request };
+  return { registerWindow, on, emit, request };
 }

@@ -10,13 +10,12 @@
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                           Renderer 层（多窗体）                              │
 │                                                                            │
-│  ┌──────────────┐  ┌──────────┐  ┌──────────────┐  ┌───────────────────┐  │
-│  │  workbench   │  │  dialer  │  │ partner:auto │  │ partner:credit /  │  │
-│  │（主控台）     │  │（外呼窗）  │  │（工单窗）     │  │ consumer / risk   │  │
-│  │             │  │          │  │              │  │（占位，待接入）     │  │
-│  └──────┬───────┘  └────┬─────┘  └──────┬───────┘  └────────┬──────────┘  │
-│         │               │               │                    │             │
-│         └───────────────┴───────────────┴────────────────────┘             │
+│  ┌──────────────┐  ┌──────────┐  ┌──────────────┐                         │
+│  │  workbench   │  │  dialer  │  │ partner:auto │                         │
+│  │（主控台）     │  │（外呼窗）  │  │（工单窗）     │                         │
+│  └──────┬───────┘  └────┬─────┘  └──────┬───────┘                         │
+│         │               │               │                                  │
+│         └───────────────┴───────────────┘                                  │
 │                         window.__bus（由 preload 注入）                      │
 │                    emit() / ack() / request() / respond() / on()           │
 └────────────────────────────────┬───────────────────────────────────────────┘
@@ -66,10 +65,19 @@
 ┌────────────────────────────────┴───────────────────────────────────────────┐
 │                            shared（协议中心）                                 │
 │                                                                            │
-│  protocol.ts   WINDOW_IDENTITIES / DOMAIN_TYPES / EVENT_POLICY / BUS_POLICY│
+│  protocol.ts   WINDOW_IDENTITIES / DOMAINS / EVENT_POLICY（唯一路由事实来源） │
 │  types.ts      BusEvent / EventMap / RequestMap / ResponseMap / BusErrorCode│
 └────────────────────────────────────────────────────────────────────────────┘
 ```
+
+### 最小阅读路径
+
+新人按此顺序即可读懂整条竖切，其余文件按需：
+
+1. `shared/protocol.ts` — 事件白名单  
+2. `event-bus-core/bus.ts` — IPC 入口与 emit 流程  
+3. `main-app/handlers.ts` — 主进程业务回包  
+4. `renderer/workbench/app.js` — 渲染端发起请求  
 
 ---
 
@@ -114,15 +122,12 @@ Renderer ──bus:request──▶ 主进程 requestTracker.register()
 | 事件类型 | Domain | 发起方 | 目标 | 模式 |
 |---|---|---|---|---|
 | `OUTBOUND_DISPATCH` | cti | workbench | dialer | Request/Response |
-| `CALL_START` | cti | workbench | `*` / dialer | Fire-and-forget |
 | `LOCK_CUSTOMER` | crm | workbench | main | Request/Response |
 | `TICKET_ACCEPT` | ticket | workbench | partner:auto | Request/Response |
 | `TICKET_DONE` | ticket | partner:auto | workbench | Fire-and-forget |
 | `RISK_CHECK` | risk | workbench | main | Request/Response |
-| `CONTEXT_UPDATED` | context | main | `*` | 广播 |
-| `LOG` | demo | any | `*` | 广播 |
 
-> `RISK_CHECK` 响应通过 `replyTo` 关联，payload 形状见 `ResponseMap.RISK_CHECK`。
+> 响应与请求同 type，通过 `replyTo` 关联；响应 payload 形状见 `ResponseMap`。
 
 ---
 
@@ -154,12 +159,9 @@ Renderer ──bus:request──▶ 主进程 requestTracker.register()
 │   └── types.ts                     # 共享类型（BusEvent / EventMap / ResponseMap 等）
 │
 ├── renderer/
-│   ├── workbench/                   # 主控台（五类通信模式发起方）
+│   ├── workbench/                   # 主控台（请求发起方）
 │   ├── dialer/                      # 外呼窗（OUTBOUND_DISPATCH 响应方）
-│   ├── partner/auto/                # 工单窗（TICKET_ACCEPT 响应方 + TICKET_DONE 发起方）
-│   ├── partner/credit/              # 信贷窗（占位）
-│   ├── partner/consumer/            # 消金窗（占位）
-│   └── partner/risk/                # 风控窗（占位）
+│   └── partner/auto/                # 工单窗（TICKET_ACCEPT 响应方 + TICKET_DONE 发起方）
 │
 ├── tests/
 │   └── event-bus-core/
@@ -169,7 +171,7 @@ Renderer ──bus:request──▶ 主进程 requestTracker.register()
 │       └── request-tracker.test.ts  # 请求响应生命周期测试
 │
 ├── scripts/
-│   └── build-runtime-assets.js      # 构建时拷贝运行时资源到 dist-runtime/
+│   └── build-runtime-assets.js      # 打包时拷贝运行时资源到 dist-runtime/（开发 start 不跑）
 │
 ├── dist/                            # tsc 编译产物
 ├── dist-umd/                        # rollup UMD 包（渲染端 SDK）
@@ -194,13 +196,15 @@ npm install
 npm start
 ```
 
-完整构建（`tsc` → `rollup` → 拷贝运行时资源）后启动 Electron。
+只编译 `tsc` + `rollup`（UMD），直接从项目根加载 `renderer/` 与 `preload`，**不**拷贝 `dist-runtime`。
 
-### 仅构建
+### 完整构建（含打包资源）
 
 ```bash
 npm run build:all
 ```
+
+在开发构建基础上再生成 `dist-runtime/`（renderer + preload + UMD 副本），供打包安装包使用。
 
 ### 运行测试
 
@@ -233,10 +237,10 @@ npm test
 
 只需改动以下 4 处，不改总线核心：
 
-1. **`shared/protocol.ts`** — 在 `WINDOW_IDENTITIES` 增加新窗体 id，视需要在 `DOMAIN_TYPES` 和 `EVENT_POLICY` 补充事件策略（二者须同步）
-2. **`main-app/window-registry.ts`** — 在 `MAIN_WINDOW_REGISTRY` 增加一条窗体配置；未就绪的窗体可设 `placeholder: true`（默认启动时跳过）
-3. **`main-app/handlers.ts`** — 视需要注册主进程 handler（仅 `target` 为 `main` / `*` 时会触发）
-4. **`renderer/<name>/`** — 新增 `index.html` 和 `app.js`
+1. **`shared/protocol.ts`** — 在 `WINDOW_IDENTITIES` 增加新窗体 id，在 `EVENT_POLICY` 补充事件策略（并视需要扩展 `DOMAINS`）
+2. **`shared/types.ts`** — 在 `EventMap` / `ResponseMap` 补充 payload；请求类事件用 `Pick` 纳入 `RequestMap`
+3. **`main-app/window-registry.ts`** — 在 `MAIN_WINDOW_REGISTRY` 增加一条窗体配置
+4. **`renderer/<name>/` + 可选 `main-app/handlers.ts`** — 页面逻辑；若目标为 main 则注册 handler
 
 ---
 
@@ -245,8 +249,8 @@ npm test
 | 目录 | 内容 | 用途 |
 |---|---|---|
 | `dist/` | tsc 编译产物 | 主进程运行时 |
-| `dist-umd/` | rollup UMD 包 | 渲染端 `<script>` 加载 |
-| `dist-runtime/` | renderer + preload + UMD 副本 | 运行时统一资源目录，主进程优先从此加载 |
+| `dist-umd/` | rollup UMD 包 | 渲染端 `<script>` 加载（开发与打包都用） |
+| `dist-runtime/` | renderer + preload + UMD 副本 | **仅打包**；`npm start` 不生成，打包态主进程优先从此加载 |
 | `logs/` | `ipc-audit-*.log` | 审计日志（按天滚动，JSONL 格式） |
 
 ---

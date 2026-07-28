@@ -1,12 +1,10 @@
-import { BusAck, BusEvent, BusResponse, RequestOptions, RequestMap, ResponseMap } from '../shared/types';
-
 /**
  * 渲染进程事件总线客户端（类型安全）
  * - 通过 preload 暴露的 window.__bus 与主进程通信
- * - 支持 on/once/off/emit，并使用本地 registry 做二次分发，避免重复绑定底层 IPC 监听
- * - 通过 EM 泛型约束不同事件 type 对应的 payload 类型，提供端到端类型安全
- * - 通过 ReqMap/ResMap 为 request/respond 提供更强类型（可选）
+ * - 支持 on/emit/ack/request/respond；本地 registry 按 type 二次分发
+ * - 通过 EM / Req / Res 泛型提供端到端类型提示
  */
+import { BusAck, BusEvent, BusResponse, RequestOptions, RequestMap, ResponseMap } from '../shared/types';
 import { v4 as uuidv4 } from 'uuid';
 
 declare global {
@@ -22,21 +20,16 @@ declare global {
 
 /**
  * createBusClient
- * @param identity 渲染端身份（将写入 event.source）
- * @template EM  事件映射（on/emit 使用）
- * @template Req 请求映射（request 入参 payload 类型）
- * @template Res 响应映射（request 返回 data 类型）
+ * @param identity 渲染端身份（写入 event.source）
  */
 export function createBusClient<
   EM extends Record<string, any> = Record<string, any>,
   Req extends Record<string, any> = RequestMap,
   Res extends Record<string, any> = ResponseMap
 >(identity: string) {
-  // 每个 event.type 对应一组 handler，避免对 window.__bus.on 重复订阅
   type Handler<K extends keyof EM & string> = (event: BusEvent<EM[K]>) => void;
   const registry = new Map<string, Set<(e: BusEvent<any>) => void>>();
 
-  // 仅订阅一次 window.__bus.on，收到事件后按 type 分发到 registry 中对应 handler
   let subscribed = false;
   let unsubscribeBridge: (() => void) | null = null;
 
@@ -53,47 +46,37 @@ export function createBusClient<
     }
   }
 
-  // fire-and-forget
   function emit<K extends keyof EM & string>(event: Omit<BusEvent<EM[K]>, 'source' | 'ts'>) {
-    const full: BusEvent<EM[K]> = { 
-      ...(event as any), 
-      source: identity, 
-      ts: Date.now() 
+    const full: BusEvent<EM[K]> = {
+      ...(event as any),
+      source: identity,
+      ts: Date.now()
     };
     window.__bus.emit(full);
   }
 
-  // ACK（仅分发确认）
   function ack<K extends keyof EM & string>(event: Omit<BusEvent<EM[K]>, 'source' | 'ts'>) {
-    const full: BusEvent<EM[K]> = { 
-      ...(event as any), 
-      source: identity, 
-      ts: Date.now() 
+    const full: BusEvent<EM[K]> = {
+      ...(event as any),
+      source: identity,
+      ts: Date.now()
     };
     return window.__bus.ack(full) as Promise<BusAck>;
   }
 
-  /**
-   * 请求-响应（带强类型）：
-   * K 为请求事件类型，入参 payload 类型来自 Req[K]，返回 data 类型来自 Res[K]
-   * 如需自定义响应类型，可在调用端用 as 断言或对 Res 泛型参数做重载。
-   */
   function request<K extends keyof Req & string>(
     event: Omit<BusEvent<Req[K]>, 'source' | 'ts'>,
     options?: RequestOptions
   ) {
-    const full: BusEvent<Req[K]> = { 
-      ...(event as any), 
-      source: identity, 
-      ts: Date.now() 
+    const full: BusEvent<Req[K]> = {
+      ...(event as any),
+      source: identity,
+      ts: Date.now()
     };
     return window.__bus.request(full, options) as Promise<BusResponse<Res[K]>>;
   }
 
-  /**
-   * 对某个请求事件进行响应（通过 replyTo 关联）。
-   * 走 ack 通道，便于拿到 unauthorized_reply / reply_type_mismatch 等错误码。
-   */
+  /** 对请求回包：同 type + replyTo；走 ack 通道以回传授权错误码 */
   function respond<K extends keyof EM & string, R = any>(to: BusEvent<EM[K]>, payload: R) {
     const reply: BusEvent<R> = {
       id: uuidv4(),
@@ -107,39 +90,23 @@ export function createBusClient<
     return window.__bus.ack(reply) as Promise<BusAck>;
   }
 
-  // 订阅相关 API
   function on<K extends keyof EM & string>(type: K, handler: Handler<K>) {
     ensureSubscribed();
     const set = registry.get(type) || new Set();
     set.add(handler as (e: BusEvent<any>) => void);
     registry.set(type, set);
-    return () => off(type, handler);
-  }
-
-  function once<K extends keyof EM & string>(type: K, handler: Handler<K>) {
-    const wrapper = (e: BusEvent<EM[K]>) => {
-      off(type, wrapper as any);
-      handler(e);
+    return () => {
+      const current = registry.get(type);
+      if (!current) return;
+      current.delete(handler as any);
+      if (current.size === 0) registry.delete(type);
+      if (registry.size === 0 && unsubscribeBridge) {
+        unsubscribeBridge();
+        unsubscribeBridge = null;
+        subscribed = false;
+      }
     };
-    return on(type, wrapper as any);
   }
 
-  function off<K extends keyof EM & string>(type: K, handler?: Handler<K>) {
-    const set = registry.get(type);
-    if (!set) return;
-    if (handler) {
-      set.delete(handler as any);
-      if (set.size === 0) registry.delete(type);
-    } else {
-      registry.delete(type);
-    }
-    // 本地无订阅时解除底层 IPC 监听，避免重复创建 client 叠监听。
-    if (registry.size === 0 && unsubscribeBridge) {
-      unsubscribeBridge();
-      unsubscribeBridge = null;
-      subscribed = false;
-    }
-  }
-
-  return { emit, ack, request, respond, on, once, off };
+  return { emit, ack, request, respond, on };
 }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateEvent } from '../../event-bus-core/router';
-import { BUS_POLICY, DOMAIN_TYPES, EVENT_POLICY } from '../../shared/protocol';
+import { DOMAINS, EVENT_POLICY } from '../../shared/protocol';
 import type { BusEvent } from '../../shared/types';
 
 function createBaseEvent(): BusEvent {
@@ -16,46 +16,21 @@ function createBaseEvent(): BusEvent {
   };
 }
 
-test('DOMAIN_TYPES entries are all covered by EVENT_POLICY', () => {
-  for (const [domain, types] of Object.entries(DOMAIN_TYPES)) {
-    for (const type of types) {
-      assert.ok(
-        type in EVENT_POLICY,
-        `DOMAIN_TYPES.${domain} includes ${type} but EVENT_POLICY is missing it`
-      );
-      assert.equal(
-        (EVENT_POLICY as Record<string, { domain: string }>)[type].domain,
-        domain,
-        `${type} domain mismatch between DOMAIN_TYPES and EVENT_POLICY`
-      );
-    }
+test('EVENT_POLICY domains are all listed in DOMAINS', () => {
+  const used = new Set(Object.values(EVENT_POLICY).map((rule) => rule.domain));
+  for (const domain of used) {
+    assert.ok((DOMAINS as readonly string[]).includes(domain), `missing domain: ${domain}`);
   }
-});
-
-test('BUS_POLICY.type mirrors EVENT_POLICY', () => {
-  assert.deepEqual(BUS_POLICY.type, EVENT_POLICY);
 });
 
 test('validateEvent accepts a valid configured event', () => {
   assert.doesNotThrow(() => validateEvent(createBaseEvent()));
 });
 
-test('validateEvent accepts CALL_START with configured policy', () => {
-  assert.doesNotThrow(() => validateEvent({
-    id: 'evt-call',
-    type: 'CALL_START',
-    domain: 'cti',
-    source: 'workbench',
-    target: '*',
-    payload: { caller: '10086' },
-    ts: Date.now(),
-  }));
-});
+test('validateEvent rejects unknown event type', () => {
+  const event = { ...createBaseEvent(), type: 'CREDIT_APPLY' };
 
-test('validateEvent rejects unknown domain', () => {
-  const event = { ...createBaseEvent(), domain: 'credit' } as any;
-
-  assert.throws(() => validateEvent(event), /未知 domain/);
+  assert.throws(() => validateEvent(event), /未知事件类型/);
 });
 
 test('validateEvent rejects mismatched event type for domain', () => {

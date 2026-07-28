@@ -5,11 +5,9 @@ export type WindowSpec = {
   title: string;
   size: { width: number; height: number };
   htmlSegments: string[];
-  // placeholder 窗体会被正常打开，但交互逻辑保持禁用，避免误接入未完成业务。
-  placeholder?: boolean;
 };
 
-// 所有主进程窗体都在这里集中注册；后续新增业务窗体时优先只改这里。
+// 所有主进程窗体集中注册；新增业务窗体时优先只改这里（并同步 protocol WINDOW_IDENTITIES）。
 export const MAIN_WINDOW_REGISTRY: readonly WindowSpec[] = [
   {
     id: 'workbench',
@@ -29,32 +27,8 @@ export const MAIN_WINDOW_REGISTRY: readonly WindowSpec[] = [
     size: { width: 560, height: 620 },
     htmlSegments: ['renderer', 'partner', 'auto', 'index.html'],
   },
-  {
-    id: 'partner:credit',
-    title: 'Partner - Credit (placeholder)',
-    size: { width: 480, height: 520 },
-    htmlSegments: ['renderer', 'partner', 'credit', 'index.html'],
-    placeholder: true,
-  },
-  {
-    id: 'partner:consumer',
-    title: 'Partner - Consumer (placeholder)',
-    size: { width: 480, height: 520 },
-    htmlSegments: ['renderer', 'partner', 'consumer', 'index.html'],
-    placeholder: true,
-  },
-  {
-    id: 'partner:risk',
-    title: 'Partner - Risk (placeholder)',
-    size: { width: 480, height: 520 },
-    htmlSegments: ['renderer', 'partner', 'risk', 'index.html'],
-    placeholder: true,
-  },
 ] as const;
 
-export function getMainWindowSpecs(options?: { includePlaceholders?: boolean }) {
-  const includePlaceholders = options?.includePlaceholders === true;
-  if (includePlaceholders) return MAIN_WINDOW_REGISTRY;
-  // 默认跳过 placeholder，避免启动时打开未接入业务的空壳窗体。
-  return MAIN_WINDOW_REGISTRY.filter((spec) => !spec.placeholder);
+export function getMainWindowSpecs() {
+  return MAIN_WINDOW_REGISTRY;
 }

@@ -41,7 +41,8 @@ test('request tracker rejects unauthorized reply without consuming pending', asy
     () => tracker.resolveReply({
       replyTo: 'req-auth',
       type: 'OUTBOUND_DISPATCH',
-      source: 'partner:credit',
+      source: 'partner:auto',
+
       payload: { hijacked: true },
     }),
     /unauthorized_reply/
@@ -110,7 +111,7 @@ test('request tracker rejects duplicate request ids', () => {
 test('request tracker rejects broadcast target as request responder', () => {
   const tracker = createRequestTracker({ capacity: 2 });
   const result = tracker.register('req-star', 1000, () => {}, {
-    type: 'LOG',
+    type: 'TICKET_DONE',
     expectedResponder: '*',
   });
   assert.deepEqual(result, { ok: false, error: 'invalid_target' });

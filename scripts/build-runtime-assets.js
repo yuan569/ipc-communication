@@ -30,7 +30,8 @@ function copyDirectory(sourceDir, targetDir) {
 }
 
 function buildRuntimeAssets() {
-  // 每次都重建运行时目录，避免旧资源残留导致“代码已改、页面未更新”的错觉。
+  // 仅供打包/发布（npm run build:all）；本地开发 npm start 不走这里。
+  // 每次重建，避免旧资源残留导致“代码已改、页面未更新”的错觉。
   fs.rmSync(runtimeRoot, { recursive: true, force: true });
   ensureDir(runtimeRoot);
 

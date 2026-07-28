@@ -6,9 +6,10 @@
   "scripts": {
     "build": "tsc",
     "build:umd": "rollup -c",
+    "build:dev": "npm run build && npm run build:umd",
     "build:runtime": "node ./scripts/build-runtime-assets.js",
-    "build:all": "npm run build && npm run build:umd && npm run build:runtime",
-    "start": "npm run build:all && electron .",
+    "build:all": "npm run build:dev && npm run build:runtime",
+    "start": "npm run build:dev && electron .",
     "test": "npm run build && node --test dist/tests/event-bus-core/*.test.js"
   },
   "author": "",

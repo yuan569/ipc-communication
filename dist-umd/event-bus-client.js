@@ -64,22 +64,11 @@
     }
 
     /**
-     * 渲染进程事件总线客户端（类型安全）
-     * - 通过 preload 暴露的 window.__bus 与主进程通信
-     * - 支持 on/once/off/emit，并使用本地 registry 做二次分发，避免重复绑定底层 IPC 监听
-     * - 通过 EM 泛型约束不同事件 type 对应的 payload 类型，提供端到端类型安全
-     * - 通过 ReqMap/ResMap 为 request/respond 提供更强类型（可选）
-     */
-    /**
      * createBusClient
-     * @param identity 渲染端身份（将写入 event.source）
-     * @template EM  事件映射（on/emit 使用）
-     * @template Req 请求映射（request 入参 payload 类型）
-     * @template Res 响应映射（request 返回 data 类型）
+     * @param identity 渲染端身份（写入 event.source）
      */
     function createBusClient(identity) {
         const registry = new Map();
-        // 仅订阅一次 window.__bus.on，收到事件后按 type 分发到 registry 中对应 handler
         let subscribed = false;
         let unsubscribeBridge = null;
         function ensureSubscribed() {
@@ -96,7 +85,6 @@
                 unsubscribeBridge = maybeOff;
             }
         }
-        // fire-and-forget
         function emit(event) {
             const full = {
                 ...event,
@@ -105,7 +93,6 @@
             };
             window.__bus.emit(full);
         }
-        // ACK（仅分发确认）
         function ack(event) {
             const full = {
                 ...event,
@@ -114,11 +101,6 @@
             };
             return window.__bus.ack(full);
         }
-        /**
-         * 请求-响应（带强类型）：
-         * K 为请求事件类型，入参 payload 类型来自 Req[K]，返回 data 类型来自 Res[K]
-         * 如需自定义响应类型，可在调用端用 as 断言或对 Res 泛型参数做重载。
-         */
         function request(event, options) {
             const full = {
                 ...event,
@@ -127,10 +109,7 @@
             };
             return window.__bus.request(full, options);
         }
-        /**
-         * 对某个请求事件进行响应（通过 replyTo 关联）。
-         * 走 ack 通道，便于拿到 unauthorized_reply / reply_type_mismatch 等错误码。
-         */
+        /** 对请求回包：同 type + replyTo；走 ack 通道以回传授权错误码 */
         function respond(to, payload) {
             const reply = {
                 id: v4(),
@@ -143,41 +122,26 @@
             };
             return window.__bus.ack(reply);
         }
-        // 订阅相关 API
         function on(type, handler) {
             ensureSubscribed();
             const set = registry.get(type) || new Set();
             set.add(handler);
             registry.set(type, set);
-            return () => off(type, handler);
-        }
-        function once(type, handler) {
-            const wrapper = (e) => {
-                off(type, wrapper);
-                handler(e);
-            };
-            return on(type, wrapper);
-        }
-        function off(type, handler) {
-            const set = registry.get(type);
-            if (!set)
-                return;
-            if (handler) {
-                set.delete(handler);
-                if (set.size === 0)
+            return () => {
+                const current = registry.get(type);
+                if (!current)
+                    return;
+                current.delete(handler);
+                if (current.size === 0)
                     registry.delete(type);
-            }
-            else {
-                registry.delete(type);
-            }
-            // 本地无订阅时解除底层 IPC 监听，避免重复创建 client 叠监听。
-            if (registry.size === 0 && unsubscribeBridge) {
-                unsubscribeBridge();
-                unsubscribeBridge = null;
-                subscribed = false;
-            }
+                if (registry.size === 0 && unsubscribeBridge) {
+                    unsubscribeBridge();
+                    unsubscribeBridge = null;
+                    subscribed = false;
+                }
+            };
         }
-        return { emit, ack, request, respond, on, once, off };
+        return { emit, ack, request, respond, on };
     }
 
     exports.createBusClient = createBusClient;
