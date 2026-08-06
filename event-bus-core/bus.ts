@@ -115,14 +115,14 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
         return;
       }
 
-      const registrationError = requestTracker.register(
+      const registration = requestTracker.register(
         event.id,
         timeout,
         resolve as any,
         { type: event.type, expectedResponder: String(expectedResponder) }
       );
-      if (registrationError) {
-        resolve(registrationError);
+      if (!registration.ok) {
+        resolve(registration);
         return;
       }
       try {

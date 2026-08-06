@@ -17,8 +17,8 @@ test('request tracker resolves authorized replyTo with success payload', async (
   const tracker = createRequestTracker({ capacity: 2 });
   const result = deferred<BusResponse<{ ok: boolean }>>();
 
-  const registrationError = tracker.register('req-1', 200, result.resolve, dialerMeta);
-  assert.equal(registrationError, null);
+  const registration = tracker.register('req-1', 200, result.resolve, dialerMeta);
+  assert.deepEqual(registration, { ok: true });
 
   const resolved = tracker.resolveReply({
     replyTo: 'req-1',
@@ -79,8 +79,8 @@ test('request tracker times out pending request', async () => {
   const tracker = createRequestTracker({ capacity: 2 });
   const result = deferred<BusResponse<any>>();
 
-  const registrationError = tracker.register('req-timeout', 10, result.resolve, dialerMeta);
-  assert.equal(registrationError, null);
+  const registration = tracker.register('req-timeout', 10, result.resolve, dialerMeta);
+  assert.deepEqual(registration, { ok: true });
 
   assert.deepEqual(await result.promise, { ok: false, error: 'timeout' });
   assert.equal(tracker.size(), 0);
@@ -92,7 +92,7 @@ test('request tracker rejects registrations over capacity', () => {
   const first = tracker.register('req-1', 1000, () => {}, dialerMeta);
   const second = tracker.register('req-2', 1000, () => {}, dialerMeta);
 
-  assert.equal(first, null);
+  assert.deepEqual(first, { ok: true });
   assert.deepEqual(second, { ok: false, error: 'over_capacity' });
   assert.equal(tracker.size(), 1);
 });
@@ -103,7 +103,7 @@ test('request tracker rejects duplicate request ids', () => {
   const first = tracker.register('req-dup', 1000, () => {}, dialerMeta);
   const second = tracker.register('req-dup', 1000, () => {}, dialerMeta);
 
-  assert.equal(first, null);
+  assert.deepEqual(first, { ok: true });
   assert.deepEqual(second, { ok: false, error: 'duplicate_request' });
   assert.equal(tracker.size(), 1);
 });
@@ -131,8 +131,8 @@ test('request tracker sweep removes expired entries without resolving success', 
   let now = 1_000;
   const tracker = createRequestTracker({ capacity: 2, now: () => now });
 
-  const registrationError = tracker.register('req-sweep', 50, () => {}, dialerMeta);
-  assert.equal(registrationError, null);
+  const registration = tracker.register('req-sweep', 50, () => {}, dialerMeta);
+  assert.deepEqual(registration, { ok: true });
   assert.equal(tracker.size(), 1);
 
   now = 1_100;
