@@ -13,6 +13,7 @@ export function normalizeBusError(err: unknown): BusErrorCode {
   if (message === 'unauthorized_source') return 'unauthorized_source';
   if (message === 'unauthorized_reply') return 'unauthorized_reply';
   if (message === 'reply_type_mismatch') return 'reply_type_mismatch';
+  if (message === 'orphan_reply') return 'orphan_reply';
   if (message.includes('非法事件格式')) return 'invalid_event';
   if (message.includes('未知事件类型')) return 'invalid_event';
   if (message.includes('未知 domain')) return 'unknown_domain';

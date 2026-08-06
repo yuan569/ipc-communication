@@ -9,13 +9,13 @@ const { contextBridge, ipcRenderer } = require('electron');
 try {
   console.log('[preload] starting, contextIsolation=%s, nodeIntegration=%s', true, false);
   contextBridge.exposeInMainWorld('__bus', {
-    // Fire-and-forget：发送事件到主进程，主进程会统一进行校验/审计/分发
+    // 单向发送（对应客户端 emit）
     emit: (e) => ipcRenderer.send('bus:emit', e),
 
-    // ACK 通道：仅返回分发确认（不等待业务响应）；respond 也走此通道以回传错误码
+    // 可回传结果的投递（对应客户端 respond；不对外暴露为业务 API）
     ack: (e) => ipcRenderer.invoke('bus:ack', e),
 
-    // REQUEST-RESPONSE 通道：等待业务响应（通过 replyTo 回传）
+    // 请求-响应（对应客户端 request）
     request: (e, options) => ipcRenderer.invoke('bus:request', e, options),
 
     // 订阅来自主进程的事件推送：主进程通过 'bus:event' 渠道广播或定向发送

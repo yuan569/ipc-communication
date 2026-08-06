@@ -1,107 +1,60 @@
 import { app, BrowserWindow } from 'electron';
-import * as fs from 'fs';
 import * as path from 'path';
-import { getMainWindowSpecs, type WindowSpec } from './window-registry';
+import { getMainWindowSpecs } from './window-registry';
 
 type WindowBus = {
   registerWindow: (name: string, win: BrowserWindow) => void;
 };
 
-// 保留开发期常用快捷键，避免每个窗体重复手动打开 DevTools。
+/**
+ * 资源根目录约定（与 package.json scripts 对齐）：
+ * - 开发（npm start → build:dev）：项目根，直接读 renderer/ + event-bus-client/preload.js
+ * - 打包（build:all → dist-runtime）：安装包内 dist-runtime/
+ */
+function resolveRuntimeRoot(): string {
+  if (app.isPackaged) {
+    return path.join(app.getAppPath(), 'dist-runtime');
+  }
+  // electron . 时 appPath 即 package.json 所在目录
+  return app.getAppPath();
+}
+
 function bindDevtoolsShortcut(win: BrowserWindow) {
-  // 仅开发态绑定，避免生产包仍可随意打开 DevTools。
   if (app.isPackaged) return;
   win.webContents.on('before-input-event', (event, input) => {
-    if (input.type === 'keyDown' && (input.key === 'F12' || (input.control && input.shift && (input.key === 'I' || input.key === 'i')))) {
+    if (
+      input.type === 'keyDown' &&
+      (input.key === 'F12' || (input.control && input.shift && (input.key === 'I' || input.key === 'i')))
+    ) {
       win.webContents.toggleDevTools();
       event.preventDefault();
     }
   });
 }
 
-function resolveRuntimeRoot() {
-  const projectRoot = path.join(__dirname, '..');
-
-  // 打包态：优先统一产物 dist-runtime，便于安装包内资源自洽。
-  if (app.isPackaged) {
-    const packagedCandidates = [
-      path.join(app.getAppPath(), 'dist-runtime'),
-      app.getAppPath(),
-    ];
-    for (const candidate of packagedCandidates) {
-      if (fs.existsSync(path.join(candidate, 'renderer'))) return candidate;
-    }
-    return app.getAppPath();
-  }
-
-  // 开发态：直接读项目根下的 renderer/ + dist-umd/，跳过 dist-runtime 拷贝。
-  if (fs.existsSync(path.join(projectRoot, 'renderer'))) {
-    return projectRoot;
-  }
-
-  const fallback = path.join(projectRoot, 'dist-runtime');
-  if (fs.existsSync(path.join(fallback, 'renderer'))) return fallback;
-  return app.getAppPath();
-}
-
-function resolvePreloadPath(runtimeRoot: string) {
-  // 开发态用源码 preload；打包态用 dist-runtime 内副本。
-  const candidates = [
-    path.join(runtimeRoot, 'event-bus-client', 'preload.js'),
-    path.join(__dirname, '..', 'event-bus-client', 'preload.js'),
-    path.join(app.getAppPath(), 'event-bus-client', 'preload.js'),
-  ];
-
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-
-  const fallback = candidates[candidates.length - 1];
-  console.warn('[main] preload not found in preferred runtime paths, fallback to:', fallback);
-  return fallback;
-}
-
 export async function createMainWindows(bus: WindowBus) {
   const runtimeRoot = resolveRuntimeRoot();
-  console.log('[main] runtime root:', runtimeRoot, app.isPackaged ? '(packaged)' : '(dev)');
+  const preload = path.join(runtimeRoot, 'event-bus-client', 'preload.js');
   const windowSpecs = getMainWindowSpecs();
-  const commonPrefs = {
+  const webPreferences = {
     contextIsolation: true,
     nodeIntegration: false,
-    preload: resolvePreloadPath(runtimeRoot),
+    preload,
   } as const;
 
-  async function createAndRegisterWindow(spec: WindowSpec) {
+  const windows: BrowserWindow[] = [];
+
+  for (const spec of windowSpecs) {
     const win = new BrowserWindow({
       width: spec.size.width,
       height: spec.size.height,
       title: spec.title,
-      webPreferences: commonPrefs,
+      webPreferences,
     });
     bindDevtoolsShortcut(win);
     bus.registerWindow(spec.id, win);
-    // HTML 统一从 runtimeRoot 加载，保证页面资源和 preload 的来源一致。
     await win.loadFile(path.join(runtimeRoot, ...spec.htmlSegments));
-    return win;
-  }
-
-  const windows: BrowserWindow[] = [];
-  let workbench: BrowserWindow | null = null;
-
-  for (const spec of windowSpecs) {
-    const win = await createAndRegisterWindow(spec);
     windows.push(win);
-    if (spec.id === 'workbench') workbench = win;
-  }
-
-  if (workbench) {
-    try {
-      // 启动时做一次桥接探测，能更快暴露 preload 路径配置问题。
-      const hasBus = await workbench.webContents.executeJavaScript('Boolean(window.__bus)');
-      console.log('[main] window.__bus exists (workbench)?', hasBus);
-    } catch (e) {
-      console.error('[main] executeJavaScript check failed', e);
-    }
   }
 
   return windows;

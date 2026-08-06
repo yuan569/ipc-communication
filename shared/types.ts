@@ -50,6 +50,7 @@ export type BusErrorCode =
   | 'unauthorized_source'
   | 'unauthorized_reply'
   | 'reply_type_mismatch'
+  | 'orphan_reply'
   | 'invalid_target'
   | 'unknown_sender'
   | 'internal_error';

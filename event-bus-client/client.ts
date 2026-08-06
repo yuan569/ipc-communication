@@ -1,8 +1,7 @@
 /**
- * 渲染进程事件总线客户端（类型安全）
- * - 通过 preload 暴露的 window.__bus 与主进程通信
- * - 支持 on/emit/ack/request/respond；本地 registry 按 type 二次分发
- * - 通过 EM / Req / Res 泛型提供端到端类型提示
+ * 渲染进程事件总线客户端
+ * 对外 API：emit（单向）/ request（请求响应）/ respond（回包）/ on（订阅）
+ * preload 的 ack 通道仅作 respond 内部实现，不对外暴露
  */
 import { BusAck, BusEvent, BusResponse, RequestOptions, RequestMap, ResponseMap } from '../shared/types';
 import { v4 as uuidv4 } from 'uuid';
@@ -12,16 +11,13 @@ declare global {
     __bus: {
       emit: (e: any) => void;
       on: (cb: (e: any) => void) => (() => void) | void;
-      ack: (e: any) => Promise<{ id: string; error?: string } | import('../shared/types').BusAck>;
+      /** 内部通道：分发确认 / respond 回传错误码 */
+      ack: (e: any) => Promise<BusAck>;
       request: (e: any, options?: RequestOptions) => Promise<BusResponse<any>>;
     }
   }
 }
 
-/**
- * createBusClient
- * @param identity 渲染端身份（写入 event.source）
- */
 export function createBusClient<
   EM extends Record<string, any> = Record<string, any>,
   Req extends Record<string, any> = RequestMap,
@@ -32,6 +28,14 @@ export function createBusClient<
 
   let subscribed = false;
   let unsubscribeBridge: (() => void) | null = null;
+
+  function enrich<T>(event: Omit<BusEvent<T>, 'source' | 'ts'>): BusEvent<T> {
+    return {
+      ...(event as any),
+      source: identity,
+      ts: Date.now(),
+    };
+  }
 
   function ensureSubscribed() {
     if (subscribed) return;
@@ -46,47 +50,28 @@ export function createBusClient<
     }
   }
 
+  /** 单向发送（fire-and-forget） */
   function emit<K extends keyof EM & string>(event: Omit<BusEvent<EM[K]>, 'source' | 'ts'>) {
-    const full: BusEvent<EM[K]> = {
-      ...(event as any),
-      source: identity,
-      ts: Date.now()
-    };
-    window.__bus.emit(full);
+    window.__bus.emit(enrich(event as any));
   }
 
-  function ack<K extends keyof EM & string>(event: Omit<BusEvent<EM[K]>, 'source' | 'ts'>) {
-    const full: BusEvent<EM[K]> = {
-      ...(event as any),
-      source: identity,
-      ts: Date.now()
-    };
-    return window.__bus.ack(full) as Promise<BusAck>;
-  }
-
+  /** 请求-响应：等待目标同 type + replyTo 回包 */
   function request<K extends keyof Req & string>(
     event: Omit<BusEvent<Req[K]>, 'source' | 'ts'>,
     options?: RequestOptions
   ) {
-    const full: BusEvent<Req[K]> = {
-      ...(event as any),
-      source: identity,
-      ts: Date.now()
-    };
-    return window.__bus.request(full, options) as Promise<BusResponse<Res[K]>>;
+    return window.__bus.request(enrich(event as any), options) as Promise<BusResponse<Res[K]>>;
   }
 
-  /** 对请求回包：同 type + replyTo；走 ack 通道以回传授权错误码 */
+  /** 对请求回包：同 type + replyTo；走 invoke 通道以拿到授权/校验错误码 */
   function respond<K extends keyof EM & string, R = any>(to: BusEvent<EM[K]>, payload: R) {
-    const reply: BusEvent<R> = {
+    const reply = enrich({
       id: uuidv4(),
       type: to.type,
       domain: to.domain,
-      source: identity,
       payload,
-      ts: Date.now(),
-      replyTo: to.id
-    };
+      replyTo: to.id,
+    });
     return window.__bus.ack(reply) as Promise<BusAck>;
   }
 
@@ -108,5 +93,5 @@ export function createBusClient<
     };
   }
 
-  return { emit, ack, request, respond, on };
+  return { emit, request, respond, on };
 }
