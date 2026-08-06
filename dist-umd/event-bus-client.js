@@ -63,14 +63,17 @@
         return _v4(options);
     }
 
-    /**
-     * createBusClient
-     * @param identity 渲染端身份（写入 event.source）
-     */
     function createBusClient(identity) {
         const registry = new Map();
         let subscribed = false;
         let unsubscribeBridge = null;
+        function enrich(event) {
+            return {
+                ...event,
+                source: identity,
+                ts: Date.now(),
+            };
+        }
         function ensureSubscribed() {
             if (subscribed)
                 return;
@@ -85,41 +88,23 @@
                 unsubscribeBridge = maybeOff;
             }
         }
+        /** 单向发送（fire-and-forget） */
         function emit(event) {
-            const full = {
-                ...event,
-                source: identity,
-                ts: Date.now()
-            };
-            window.__bus.emit(full);
+            window.__bus.emit(enrich(event));
         }
-        function ack(event) {
-            const full = {
-                ...event,
-                source: identity,
-                ts: Date.now()
-            };
-            return window.__bus.ack(full);
-        }
+        /** 请求-响应：等待目标同 type + replyTo 回包 */
         function request(event, options) {
-            const full = {
-                ...event,
-                source: identity,
-                ts: Date.now()
-            };
-            return window.__bus.request(full, options);
+            return window.__bus.request(enrich(event), options);
         }
-        /** 对请求回包：同 type + replyTo；走 ack 通道以回传授权错误码 */
+        /** 对请求回包：同 type + replyTo；走 invoke 通道以拿到授权/校验错误码 */
         function respond(to, payload) {
-            const reply = {
+            const reply = enrich({
                 id: v4(),
                 type: to.type,
                 domain: to.domain,
-                source: identity,
                 payload,
-                ts: Date.now(),
-                replyTo: to.id
-            };
+                replyTo: to.id,
+            });
             return window.__bus.ack(reply);
         }
         function on(type, handler) {
@@ -141,7 +126,7 @@
                 }
             };
         }
-        return { emit, ack, request, respond, on };
+        return { emit, request, respond, on };
     }
 
     exports.createBusClient = createBusClient;

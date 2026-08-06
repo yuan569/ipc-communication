@@ -10,6 +10,7 @@ test('normalizeBusError maps known messages to stable codes', () => {
   assert.equal(normalizeBusError(new Error('unauthorized_source')), 'unauthorized_source');
   assert.equal(normalizeBusError(new Error('unauthorized_reply')), 'unauthorized_reply');
   assert.equal(normalizeBusError(new Error('reply_type_mismatch')), 'reply_type_mismatch');
+  assert.equal(normalizeBusError(new Error('orphan_reply')), 'orphan_reply');
   assert.equal(normalizeBusError(new Error('非法事件格式')), 'invalid_event');
   assert.equal(normalizeBusError(new Error('未知事件类型: CREDIT_APPLY')), 'invalid_event');
   assert.equal(normalizeBusError(new Error('未知 domain: credit')), 'unknown_domain');
