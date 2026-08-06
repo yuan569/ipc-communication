@@ -1,6 +1,6 @@
-import { BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
+import { BrowserWindow, ipcMain } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
-import { BusEvent, BusResponse, RequestOptions, type BusErrorCode } from '../shared/types';
+import { BusEvent, BusResponse, RequestOptions } from '../shared/types';
 import type { WindowIdentity } from '../shared/protocol';
 import { auditLog } from './audit';
 import { normalizeBusError } from './errors';
@@ -12,15 +12,9 @@ import { assertSenderIdentity } from './sender-auth';
  * 事件总线（主进程）
  * - 负责：
  *   1) 接收 Renderer 通过 IPC 发送的事件并做校验/审计
- *   2) 调用主进程内注册的处理器（handlers）
+ *   2) 调用主进程内注册的处理器（handlers）——仅当 target 为 main / *
  *   3) 将事件转发给指定或全部 Renderer 窗口
  * - 类型安全：通过 EM 泛型约束不同事件 type 对应的 payload 类型
- *
- * 使用示例：
- *   type EM = { CALL_START: { caller: string }, CREDIT_APPROVE: { orderId: string } };
- *   const bus = createEventBus<EM>();
- *   const off = bus.on('CALL_START', (e) => console.log(e.payload.caller));
- *   bus.emit({ id, type: 'CALL_START', domain: 'call', source: 'main', target: '*', payload: { caller: '10086' }, ts: Date.now() });
  */
 export function createEventBus<EM extends Record<string, any> = Record<string, any>>() {
   /**
@@ -58,69 +52,61 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
 
   /**
    * 订阅指定类型事件（可多次订阅）。返回值为取消订阅函数。
-   * @param type 事件类型（受 EM 泛型约束）
-   * @param handler 事件处理器，参数为完整 BusEvent
    */
   function on<K extends keyof EM & string>(type: K, handler: (event: BusEvent<EM[K]>) => void) {
     const set = handlers.get(type) || new Set();
     set.add(handler as (event: BusEvent<any>) => void);
     handlers.set(type, set);
-    // 返回取消订阅函数，便于调用方释放资源/避免内存泄漏
-    return () => off(type, handler as any);
-  }
-
-  /**
-   * 订阅一次性事件：触发一次后自动取消订阅
-   */
-  function once<K extends keyof EM & string>(type: K, handler: (event: BusEvent<EM[K]>) => void) {
-    const wrapper = (event: BusEvent<EM[K]>) => {
-      off(type, wrapper as any);
-      handler(event);
+    return () => {
+      const current = handlers.get(type);
+      if (!current) return;
+      current.delete(handler as any);
+      if (current.size === 0) handlers.delete(type);
     };
-    return on(type, wrapper as any);
-  }
-
-  /**
-   * 取消订阅
-   * @param type 要取消的事件类型
-   * @param handler 可选；若不传则清空该类型下的所有处理器
-   */
-  function off<K extends keyof EM & string>(type: K, handler?: (event: BusEvent<EM[K]>) => void) {
-    const set = handlers.get(type);
-    if (!set) return;
-    if (handler) {
-      set.delete(handler as any);
-      if (set.size === 0) handlers.delete(type);
-    } else {
-      handlers.delete(type);
-    }
   }
 
   const requestTracker = createRequestTracker({ capacity: PENDING_CAP });
 
+  function shouldRunMainHandlers(target: BusEvent['target']): boolean {
+    // 主进程 handler 只处理明确发给 main 或广播的事件，避免误处理定向到其它窗体的请求。
+    return !target || target === 'main' || target === '*';
+  }
+
   /**
    * 发送事件（主进程内调用）
    * 流程：校验 -> 审计 -> 主进程内部处理 -> 分发给 Renderer
+   * 带 replyTo 时：先做授权校验，合法则完成 pending 并返回（不再二次分发）
    */
   function emit<K extends keyof EM & string>(event: BusEvent<EM[K]>) {
-    // 若为响应（带 replyTo），优先完成等待中的请求
-    if (requestTracker.resolveReply(event.replyTo, (event as any).payload)) return;
+    // 若为响应（带 replyTo），优先按授权完成等待中的请求
+    if (event.replyTo) {
+      const resolved = requestTracker.resolveReply({
+        replyTo: event.replyTo,
+        type: event.type,
+        source: event.source,
+        payload: (event as any).payload,
+      });
+      if (resolved) return;
+      // 无对应 pending：继续走校验/分发（例如迟到回包或误带 replyTo）
+    }
 
     // 1) 事件校验（来源/域/字段等规则）
     validateEvent(event);
     // 2) 审计日志（可替换为 ELK/Kafka 等）
     auditLog(event);
 
-    // 3) 主进程内部处理（仅调用注册在主进程的 handlers）
-    (handlers.get(event.type as string) || new Set()).forEach(fn => {
-      try {
-        fn(event as any);
-      } catch (err) {
-        try { console.error('[bus][handler][error]', err); } catch {}
-      }
-    });
+    // 3) 主进程内部处理（仅 target 为 main / * / 空时调用）
+    if (shouldRunMainHandlers(event.target)) {
+      (handlers.get(event.type as string) || new Set()).forEach(fn => {
+        try {
+          fn(event as any);
+        } catch (err) {
+          try { console.error('[bus][handler][error]', err); } catch {}
+        }
+      });
+    }
 
-    // 4) 分发给 Renderer（目标窗口或广播）
+    // 4) 分发给 Renderer（目标窗口或广播）；target === 'main' 时无对应窗体，跳过即可
     dispatch(event as any);
   }
 
@@ -130,6 +116,7 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
    * - 否则按目标窗口名定向发送
    */
   function dispatch(event: BusEvent<any>) {
+    if (event.target === 'main') return;
     if (event.target === '*') {
       windows.forEach(win =>
         win.webContents.send('bus:event', event)
@@ -141,9 +128,7 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
   }
 
   /**
-   * 请求（支持 ack/request-response + 超时）
-   * - ack: true => 分发后立即返回 ack
-   * - ack: false/默认 => 等待某个 Renderer 使用 replyTo=原 id 发回响应
+   * 请求-响应：注册 pending，等待目标用同 type + replyTo 回包；支持超时与容量限制。
    */
   function request<T = any>(event: BusEvent<any>, options?: RequestOptions): Promise<BusResponse<T>> {
     const timeout = (options?.timeout ?? 10000);
@@ -153,13 +138,29 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
 
     // 容量守卫
     return new Promise<BusResponse<T>>((resolve) => {
+      const expectedResponder = event.target;
+      if (!expectedResponder || expectedResponder === '*') {
+        resolve({ ok: false, error: 'invalid_target' });
+        return;
+      }
+
       // requestTracker 负责超时与 replyTo 生命周期；bus 本身只负责编排。
-      const registrationError = requestTracker.register(event.id, timeout, resolve as any);
+      const registrationError = requestTracker.register(
+        event.id,
+        timeout,
+        resolve as any,
+        { type: event.type, expectedResponder: String(expectedResponder) }
+      );
       if (registrationError) {
         resolve(registrationError);
         return;
       }
-      emit(event as any);
+      try {
+        emit(event as any);
+      } catch (err) {
+        // emit 同步失败时结束 pending，避免调用方空等超时
+        requestTracker.failPending(event.id, normalizeBusError(err));
+      }
     });
   }
 
@@ -167,7 +168,6 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
 
   // IPC 桥接：接收来自 Renderer 的 "bus:emit"，交由主进程 emit 统一处理
   ipcMain.on('bus:emit', (ipcEvent, event: BusEvent<any>) => {
-    // console.log('[handle:bus-emit][event]', event);
     try {
       // 所有来自 renderer 的入口都先做 sender 校验，再进入统一总线流程。
       assertSenderIdentity(senderIdentityByWebContentsId, ipcEvent.sender.id, event);
@@ -177,9 +177,8 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
     }
   });
 
-  // IPC 桥接（ACK）：仅返回分发确认，不等待业务响应
+  // IPC 桥接（ACK）：仅返回分发确认，不等待业务响应；也用于 respond 回传授权错误
   ipcMain.handle('bus:ack', async (ipcEvent, event: BusEvent<any>) => {
-    // console.log('[handle:bus-ack][event]', event);
     try {
       if (!event.id) event.id = uuidv4();
       assertSenderIdentity(senderIdentityByWebContentsId, ipcEvent.sender.id, event);
@@ -193,7 +192,6 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
 
   // IPC 桥接（REQUEST）：等待业务响应（通过 replyTo=原 id 的事件触发）
   ipcMain.handle('bus:request', async (ipcEvent, event: BusEvent<any>, options?: RequestOptions) => {
-    // console.log('[handle:bus-request][event]', event);
     try {
       assertSenderIdentity(senderIdentityByWebContentsId, ipcEvent.sender.id, event);
       return await request(event, options);
@@ -211,5 +209,5 @@ export function createEventBus<EM extends Record<string, any> = Record<string, a
     }
   }, SWEEP_INTERVAL_MS).unref?.();
 
-  return { registerWindow, on, once, off, emit, request };
+  return { registerWindow, on, emit, request };
 }

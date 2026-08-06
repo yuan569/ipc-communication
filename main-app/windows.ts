@@ -9,6 +9,8 @@ type WindowBus = {
 
 // 保留开发期常用快捷键，避免每个窗体重复手动打开 DevTools。
 function bindDevtoolsShortcut(win: BrowserWindow) {
+  // 仅开发态绑定，避免生产包仍可随意打开 DevTools。
+  if (app.isPackaged) return;
   win.webContents.on('before-input-event', (event, input) => {
     if (input.type === 'keyDown' && (input.key === 'F12' || (input.control && input.shift && (input.key === 'I' || input.key === 'i')))) {
       win.webContents.toggleDevTools();
@@ -18,28 +20,36 @@ function bindDevtoolsShortcut(win: BrowserWindow) {
 }
 
 function resolveRuntimeRoot() {
-  // 优先使用统一构建产物；这样运行时尽量脱离源码目录。
-  const candidates = [
-    path.join(app.getAppPath(), 'dist-runtime'),
-    path.join(__dirname, '..', 'dist-runtime'),
-    app.getAppPath(),
-  ];
+  const projectRoot = path.join(__dirname, '..');
 
-  for (const candidate of candidates) {
-    if (fs.existsSync(path.join(candidate, 'renderer'))) {
-      return candidate;
+  // 打包态：优先统一产物 dist-runtime，便于安装包内资源自洽。
+  if (app.isPackaged) {
+    const packagedCandidates = [
+      path.join(app.getAppPath(), 'dist-runtime'),
+      app.getAppPath(),
+    ];
+    for (const candidate of packagedCandidates) {
+      if (fs.existsSync(path.join(candidate, 'renderer'))) return candidate;
     }
+    return app.getAppPath();
   }
 
+  // 开发态：直接读项目根下的 renderer/ + dist-umd/，跳过 dist-runtime 拷贝。
+  if (fs.existsSync(path.join(projectRoot, 'renderer'))) {
+    return projectRoot;
+  }
+
+  const fallback = path.join(projectRoot, 'dist-runtime');
+  if (fs.existsSync(path.join(fallback, 'renderer'))) return fallback;
   return app.getAppPath();
 }
 
 function resolvePreloadPath(runtimeRoot: string) {
-  // preload 会随构建产物复制一份，但开发态仍保留旧路径回退，降低切换风险。
+  // 开发态用源码 preload；打包态用 dist-runtime 内副本。
   const candidates = [
     path.join(runtimeRoot, 'event-bus-client', 'preload.js'),
-    path.join(app.getAppPath(), 'event-bus-client', 'preload.js'),
     path.join(__dirname, '..', 'event-bus-client', 'preload.js'),
+    path.join(app.getAppPath(), 'event-bus-client', 'preload.js'),
   ];
 
   for (const candidate of candidates) {
@@ -53,6 +63,7 @@ function resolvePreloadPath(runtimeRoot: string) {
 
 export async function createMainWindows(bus: WindowBus) {
   const runtimeRoot = resolveRuntimeRoot();
+  console.log('[main] runtime root:', runtimeRoot, app.isPackaged ? '(packaged)' : '(dev)');
   const windowSpecs = getMainWindowSpecs();
   const commonPrefs = {
     contextIsolation: true,

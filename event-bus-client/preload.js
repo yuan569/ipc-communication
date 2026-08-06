@@ -12,15 +12,21 @@ try {
     // Fire-and-forget：发送事件到主进程，主进程会统一进行校验/审计/分发
     emit: (e) => ipcRenderer.send('bus:emit', e),
 
-    // ACK 通道：仅返回分发确认（不等待业务响应）
+    // ACK 通道：仅返回分发确认（不等待业务响应）；respond 也走此通道以回传错误码
     ack: (e) => ipcRenderer.invoke('bus:ack', e),
 
     // REQUEST-RESPONSE 通道：等待业务响应（通过 replyTo 回传）
     request: (e, options) => ipcRenderer.invoke('bus:request', e, options),
 
     // 订阅来自主进程的事件推送：主进程通过 'bus:event' 渠道广播或定向发送
-    // 这里不做类型过滤，类型过滤交由渲染端 client（本地二次分发）处理
-    on: (cb) => ipcRenderer.on('bus:event', (_, e) => cb(e))
+    // 返回取消订阅函数，避免重复绑定导致监听泄漏
+    on: (cb) => {
+      const listener = (_event, e) => cb(e);
+      ipcRenderer.on('bus:event', listener);
+      return () => {
+        ipcRenderer.removeListener('bus:event', listener);
+      };
+    }
   });
   console.log('[preload] __bus exposed');
 } catch (err) {

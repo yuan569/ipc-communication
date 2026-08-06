@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateEvent } from '../../event-bus-core/router';
+import { DOMAINS, EVENT_POLICY } from '../../shared/protocol';
 import type { BusEvent } from '../../shared/types';
 
 function createBaseEvent(): BusEvent {
@@ -15,14 +16,21 @@ function createBaseEvent(): BusEvent {
   };
 }
 
+test('EVENT_POLICY domains are all listed in DOMAINS', () => {
+  const used = new Set(Object.values(EVENT_POLICY).map((rule) => rule.domain));
+  for (const domain of used) {
+    assert.ok((DOMAINS as readonly string[]).includes(domain), `missing domain: ${domain}`);
+  }
+});
+
 test('validateEvent accepts a valid configured event', () => {
   assert.doesNotThrow(() => validateEvent(createBaseEvent()));
 });
 
-test('validateEvent rejects unknown domain', () => {
-  const event = { ...createBaseEvent(), domain: 'credit' } as any;
+test('validateEvent rejects unknown event type', () => {
+  const event = { ...createBaseEvent(), type: 'CREDIT_APPLY' };
 
-  assert.throws(() => validateEvent(event), /未知 domain/);
+  assert.throws(() => validateEvent(event), /未知事件类型/);
 });
 
 test('validateEvent rejects mismatched event type for domain', () => {
